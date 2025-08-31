@@ -1,0 +1,34 @@
+name: Fetch daily greyhound form PDFs
+
+on:
+  schedule:
+    # Runs every day at 08:00 AEST (UTC+10) ≈ 22:00 UTC previous day
+    - cron: "0 22 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install requests
+
+      - name: Run fetcher
+        run: python fetch_forms.py
+
+      - name: Commit new PDFs
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore(forms): daily fetch $(date -u +'%Y-%m-%d')"
+          file_pattern: "forms/**.pdf"
