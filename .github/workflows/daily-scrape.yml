@@ -2,17 +2,15 @@ name: Daily greyhound scrape
 
 on:
   schedule:
-    # Runs every day at 02:00 UTC (≈ 12:00 AEST/13:00 AEDT). Adjust if you like.
-    - cron: "0 2 * * *"
-  workflow_dispatch: {}   # allows manual run
+    - cron: "0 2 * * *"   # Runs every day 02:00 UTC
+  workflow_dispatch: {}   # Manual run allowed
 
 permissions:
-  contents: write   # required so the workflow can commit files
+  contents: write
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
@@ -28,17 +26,23 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Run scraper
-        run: |
-          python scraper.py
+        run: python scraper.py
 
-      - name: Commit changes (if any)
+      - name: Commit PDFs (if any)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+          git add forms/*.pdf || true
           if git diff --cached --quiet; then
-            echo "No changes to commit."
+            echo "No new PDFs to commit."
           else
-            git commit -m "Auto: daily scrape $(date -u +"%Y-%m-%d %H:%M:%S")"
+            git commit -m "Add today's form PDFs"
             git push
           fi
+
+      - name: Upload PDFs as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: form-pdfs
+          path: forms/*.pdf
+          if-no-files-found: warn
