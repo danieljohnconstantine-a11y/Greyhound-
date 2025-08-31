@@ -1,6 +1,11 @@
 # scraper.py
-import os, sys, csv, datetime, requests
+
+import sys
+import csv
+import datetime
 from pathlib import Path
+
+import requests
 
 # === 1) ADD/EDIT TODAY'S FORM LINKS HERE ===
 URLS = [
