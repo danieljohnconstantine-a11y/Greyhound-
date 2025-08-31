@@ -1,3 +1,10 @@
+import os
+from datetime import datetime
+
+# Make an output folder if it doesn't exist
+today = datetime.utcnow().strftime("%Y-%m-%d")
+out_dir = f"out/{today}"
+os.makedirs(out_dir, exist_ok=True)
 #!/usr/bin/env python3
 """
 R&S Greyhound Form PDF Scraper (Ladbrokes tracks)
