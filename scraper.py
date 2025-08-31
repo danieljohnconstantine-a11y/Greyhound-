@@ -198,3 +198,16 @@ def main():
 
 if __name__ == "__main__":
     main()
+import datetime
+import os
+
+# make sure output folder exists
+os.makedirs("forms", exist_ok=True)
+
+# give each run a filename with today's date
+today = datetime.date.today().strftime("%Y-%m-%d")
+filename = f"forms/form_{today}.txt"
+
+with open(filename, "w", encoding="utf-8") as f:
+    f.write("Scraper run successful!\n")
+    f.write("Here’s where you’ll later save race form data.\n")
