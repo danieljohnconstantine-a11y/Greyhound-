@@ -1,3 +1,41 @@
+import requests
+from pathlib import Path
+
+# === Where to save ===
+SAVE_DIR = Path("forms")
+SAVE_DIR.mkdir(exist_ok=True)
+
+# === URLs to fetch ===
+URLS = [
+    "https://files.racingandsports.com/racing/racing/raceinfo/newformpdf/SALEG3108form.pdf",
+    "https://files.racingandsports.com/racing/racing/raceinfo/newformpdf/RICHG3108form.pdf",
+    "https://files.racingandsports.com/racing/racing/raceinfo/newformpdf/HEALG3108form.pdf",
+    "https://files.racingandsports.com/racing/racing/raceinfo/newformpdf/CAPAG3108form.pdf",
+    "https://files.racingandsports.com/racing/racing/raceinfo/newformpdf/DRWNG3108form.pdf",
+    "https://files.racingandsports.com/racing/racing/raceinfo/newformpdf/GRAFG3108form.pdf",
+    "https://files.racingandsports.com/racing/racing/raceinfo/newformpdf/GAWLG3108form.pdf",
+    "https://files.racingandsports.com/racing/racing/raceinfo/newformpdf/QSTRG3108form.pdf",
+]
+
+def download_file(url: str):
+    try:
+        filename = url.split("/")[-1]  # e.g. SALEG3108form.pdf
+        out_path = SAVE_DIR / filename
+        print(f"Downloading {filename}...")
+        resp = requests.get(url, timeout=20)
+        resp.raise_for_status()
+        with open(out_path, "wb") as f:
+            f.write(resp.content)
+        print(f"✅ Saved to {out_path}")
+    except Exception as e:
+        print(f"❌ Failed {url}: {e}")
+
+def main():
+    for url in URLS:
+        download_file(url)
+
+if __name__ == "__main__":
+    main()
 #!/usr/bin/env python3
 """
 Download Racing and Sports greyhound form PDFs and save with short track codes.
