@@ -1,220 +1,138 @@
-import os
-from datetime import datetime
-
-# Make an output folder if it doesn't exist
-today = datetime.utcnow().strftime("%Y-%m-%d")
-out_dir = f"out/{today}"
-os.makedirs(out_dir, exist_ok=True)
 #!/usr/bin/env python3
 """
-R&S Greyhound Form PDF Scraper (Ladbrokes tracks)
-- Builds the known R&S PDF URLs for a given date and venue codes
-- Downloads available PDFs
-- Saves to data/forms/YYYYMMDD/<VENUECODE>.pdf
-- Emits a manifest JSON of successes/failures
+Download Racing and Sports greyhound form PDFs and save with short track codes.
 
-Usage:
-  python scraper.py                # uses today's date (AEST) and all default venues
-  python scraper.py --date 2025-08-31
-  python scraper.py --date 20250831 --venues RICHG HEALG DRWNG
+- No external dependencies (uses urllib).
+- Auto-creates a 'forms' folder.
+- Auto-names from URL (e.g., SALEG3108form.pdf -> SALE.pdf).
+- Avoids overwriting by appending _2, _3, ... when needed.
 """
 
-from __future__ import annotations
-
-import argparse
-import datetime as dt
-import json
+import os
 import re
+import sys
 import time
-from pathlib import Path
-from typing import Dict, List, Tuple
-
-import requests
-from zoneinfo import ZoneInfo
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
 
 # ------------------------------------------------------------
-# Configuration
+# 1) Add today's URLs here (you can edit this list daily or
+#    wire it to your GitHub Automation later).
 # ------------------------------------------------------------
+URLS = [
+    "https://files.racingandsports.com/racing/racing/raceinfo/newformpdf/HEALG3108form.pdf",
+    "https://files.racingandsports.com/racing/racing/raceinfo/newformpdf/CAPAG3108form.pdf",
+    "https://files.racingandsports.com/racing/racing/raceinfo/newformpdf/DRWNG3108form.pdf",
+    "https://files.racingandsports.com/racing/racing/raceinfo/newformpdf/GRAFG3108form.pdf",
+    "https://files.racingandsports.com/racing/racing/raceinfo/newformpdf/GAWLG3108form.pdf",
+    "https://files.racingandsports.com/racing/racing/raceinfo/newformpdf/QSTRG3108form.pdf",
+    "https://files.racingandsports.com/racing/racing/raceinfo/newformpdf/RICHG3108form.pdf",
+    "https://files.racingandsports.com/racing/racing/raceinfo/newformpdf/SALEG3108form.pdf",
+]
 
-# Known Ladbrokes-listed venue codes (Racing & Sports PDF prefix)
-# Add/remove as needed.
-VENUE_CODES: Dict[str, str] = {
-    # NSW
-    "RICHG": "Richmond",
-    "GRAFG": "Grafton",
-    "DRWNG": "Dapto (Druin/Dapto Wednesday card on R&S short-code DRWNG)",
-    "HEALG": "Healesville (Vic; straight track but appears in Ladbrokes)",
-    # VIC
-    "SALEG": "Sale",
-    # SA
-    "GAWLG": "Gawler",
-    # QLD
-    "QSTRG": "Queensland straight (Qld regional; appears on R&S with this code)",
-    # TAS / NT (add if needed)
-    # "HOBTG": "Hobart",
-    # "LAUCT": "Launceston",
-    # Others we saw earlier; add as you confirm they appear on Ladbrokes:
-    "CAPAG": "Capalaba",
-    # If you want to try Wyong/Taree equivalents etc., add here when you confirm PDF codes:
-    # "WYNGT": "Wyong (if greyhounds meet appears on R&S)",
-}
-
-RNS_BASE = "https://files.racingandsports.com/racing/racing/raceinfo/newformpdf"
-
-# Networking
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; GreyhoundFormBot/1.0; +https://github.com/yourrepo)",
-    "Accept": "application/pdf, */*",
-}
-TIMEOUT = 20  # seconds
-RETRY = 2     # simple retries per file
-SLEEP_BETWEEN = 0.7  # be polite
-
+OUTPUT_DIR = "forms"
+TIMEOUT_SEC = 30
+USER_AGENT = "Mozilla/5.0 (compatible; GreyhoundFormBot/1.0; +https://github.com/)"
 
 # ------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------
+def ensure_dir(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
 
-def parse_date_arg(date_str: str | None) -> dt.date:
-    """Parse --date argument. Accepts YYYY-MM-DD or YYYYMMDD. Defaults to 'today' in AEST."""
-    if not date_str:
-        # Today in AEST because Aus meetings are local to Eastern time most days.
-        today_aest = dt.datetime.now(ZoneInfo("Australia/Sydney")).date()
-        return today_aest
-    # Try YYYY-MM-DD
-    m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", date_str)
-    if m:
-        return dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-    # Try YYYYMMDD
-    m = re.fullmatch(r"(\d{4})(\d{2})(\d{2})", date_str)
-    if m:
-        return dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-    raise ValueError("Invalid --date format. Use YYYY-MM-DD or YYYYMMDD.")
+def basename_from_url(url: str) -> str:
+    return os.path.basename(urlparse(url).path)
 
-
-def ddmm(date_obj: dt.date) -> str:
-    """Return DDMM string for the R&S filename convention."""
-    return date_obj.strftime("%d%m")
-
-
-def build_pdf_url(venue_code: str, date_obj: dt.date) -> str:
+def short_track_code(filename: str) -> str:
     """
-    R&S file naming convention:
-      {VENUE}{DDMM}form.pdf  (e.g., SALEG3108form.pdf)
+    From 'SALEG3108form.pdf' -> 'SALE'
+    Logic:
+      - take the leading letters from the start of the filename (e.g., 'SALEG')
+      - return the first 4 uppercase letters
+      - fallback: use the first 4 characters of the filename
     """
-    return f"{RNS_BASE}/{venue_code}{ddmm(date_obj)}form.pdf"
+    m = re.match(r"([A-Za-z]+)", filename)
+    if m:
+        letters = m.group(1).upper()
+        if len(letters) >= 4:
+            return letters[:4]
+        if letters:
+            return letters  # shorter than 4, but still something
+    # Fallback
+    return filename[:4].upper()
 
+def unique_path(base_path: str) -> str:
+    """
+    If base_path exists, append _2, _3, ... to get a unique path.
+    """
+    if not os.path.exists(base_path):
+        return base_path
+    root, ext = os.path.splitext(base_path)
+    i = 2
+    while True:
+        candidate = f"{root}_{i}{ext}"
+        if not os.path.exists(candidate):
+            return candidate
+        i += 1
 
-def ensure_dir(outdir: Path) -> None:
-    outdir.mkdir(parents=True, exist_ok=True)
+def download_pdf(url: str, out_path: str) -> bool:
+    req = Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urlopen(req, timeout=TIMEOUT_SEC) as resp:
+            data = resp.read()
+    except HTTPError as e:
+        print(f"[ERROR] HTTP {e.code} fetching {url}")
+        return False
+    except URLError as e:
+        print(f"[ERROR] URL error fetching {url}: {e}")
+        return False
+    except Exception as e:
+        print(f"[ERROR] Unexpected error fetching {url}: {e}")
+        return False
 
-
-def fetch_pdf(url: str) -> Tuple[bool, bytes | None, str | None]:
-    """Try to fetch the PDF. Returns (ok, content, error_message)."""
-    for attempt in range(1, RETRY + 2):
-        try:
-            resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
-            if resp.status_code == 200 and resp.headers.get("Content-Type", "").lower().startswith("application/pdf"):
-                return True, resp.content, None
-            elif resp.status_code == 404:
-                return False, None, "Not found (404)"
-            else:
-                err = f"HTTP {resp.status_code}"
-        except requests.RequestException as e:
-            err = f"Request error: {e}"
-        if attempt <= RETRY:
-            time.sleep(1.2 * attempt)
-            continue
-        return False, None, err
-
+    with open(out_path, "wb") as f:
+        f.write(data)
+    return True
 
 # ------------------------------------------------------------
 # Main
 # ------------------------------------------------------------
+def main() -> int:
+    ensure_dir(OUTPUT_DIR)
 
-def main():
-    parser = argparse.ArgumentParser(description="Download R&S Greyhound form PDFs for Ladbrokes-listed tracks.")
-    parser.add_argument("--date", help="Target date (YYYY-MM-DD or YYYYMMDD). Defaults to today (AEST).", default=None)
-    parser.add_argument("--venues", nargs="*", help="Optional list of venue codes to limit (e.g., RICHG HEALG).")
-    parser.add_argument("--out", default="data/forms", help="Output root directory (default: data/forms)")
-    args = parser.parse_args()
+    saved = 0
+    failed = 0
 
-    target_date = parse_date_arg(args.date)
-    ymd = target_date.strftime("%Y%m%d")
-    out_root = Path(args.out) / ymd
-    ensure_dir(out_root)
+    print(f"Found {len(URLS)} URLs to fetch.\n")
 
-    if args.venues:
-        # Validate user-specified list against our known mapping
-        missing = [v for v in args.venues if v not in VENUE_CODES]
-        if missing:
-            print(f"[warn] Unknown venue codes (skipped): {', '.join(missing)}")
-        venues = [v for v in args.venues if v in VENUE_CODES]
-    else:
-        venues = list(VENUE_CODES.keys())
+    for url in URLS:
+        raw_name = basename_from_url(url)                # e.g., SALEG3108form.pdf
+        code = short_track_code(raw_name)                # e.g., SALE
+        short_name = f"{code}.pdf"                       # e.g., SALE.pdf
+        final_path = unique_path(os.path.join(OUTPUT_DIR, short_name))
 
-    print(f"Date: {target_date}  (AEST)")
-    print(f"Saving to: {out_root.resolve()}")
-    print(f"Venues: {', '.join(venues)}")
-    print("-" * 60)
+        print(f"- Fetching: {url}")
+        print(f"  → Will save as: {os.path.basename(final_path)}")
 
-    manifest = {
-        "date": ymd,
-        "venues": {},
-    }
-
-    for code in venues:
-        url = build_pdf_url(code, target_date)
-        nice = VENUE_CODES.get(code, code)
-        print(f"[{code}] {nice} -> {url}")
-        ok, content, err = fetch_pdf(url)
-        if ok and content:
-            outfile = out_root / f"{code}.pdf"
-            outfile.write_bytes(content)
-            size_kb = len(content) / 1024
-            print(f"   ✓ saved {outfile.name} ({size_kb:.1f} KB)")
-            manifest["venues"][code] = {
-                "name": nice,
-                "url": url,
-                "saved": str(outfile),
-                "status": "ok",
-                "size_kb": round(size_kb, 1),
-            }
+        ok = download_pdf(url, final_path)
+        if ok:
+            saved += 1
+            print(f"  ✔ Saved to {final_path}\n")
         else:
-            print(f"   ✗ failed: {err}")
-            manifest["venues"][code] = {
-                "name": nice,
-                "url": url,
-                "saved": None,
-                "status": "error",
-                "error": err,
-            }
-        time.sleep(SLEEP_BETWEEN)
+            failed += 1
+            print(f"  ✖ Failed\n")
 
-    # Write manifest
-    mf_path = out_root / "manifest.json"
-    mf_path.write_text(json.dumps(manifest, indent=2))
-    print("-" * 60)
-    print(f"Manifest written: {mf_path.resolve()}")
+        # Be polite to the host
+        time.sleep(1)
 
-    # Quick summary
-    ok_count = sum(1 for v in manifest["venues"].values() if v["status"] == "ok")
-    err_count = sum(1 for v in manifest["venues"].values() if v["status"] != "ok")
-    print(f"Done. OK: {ok_count}  Failed: {err_count}")
+    print("----- Summary -----")
+    print(f"Saved:  {saved}")
+    print(f"Failed: {failed}")
+    print(f"Output folder: {OUTPUT_DIR}")
 
+    # Exit code 0 even on some failures, so the workflow can still commit partial results.
+    return 0
 
 if __name__ == "__main__":
-    main()
-import datetime
-import os
-
-# make sure output folder exists
-os.makedirs("forms", exist_ok=True)
-
-# give each run a filename with today's date
-today = datetime.date.today().strftime("%Y-%m-%d")
-filename = f"forms/form_{today}.txt"
-
-with open(filename, "w", encoding="utf-8") as f:
-    f.write("Scraper run successful!\n")
-    f.write("Here’s where you’ll later save race form data.\n")
+    sys.exit(main())
