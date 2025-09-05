@@ -1,8 +1,6 @@
 .venv/
 __pycache__/
 *.pyc
-reports/**
-!reports/.gitkeep
 data/**
 !data/.gitkeep
 .env
