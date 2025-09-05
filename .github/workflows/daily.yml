@@ -1,0 +1,45 @@
+name: Daily Greyhound Run
+
+on:
+  schedule:
+    # ~08:00 AEST/AEDT (two crons cover both offsets)
+    - cron: "0 22 * * *"
+    - cron: "0 21 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # System packages needed by camelot/pdf tools
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ghostscript python3-tk tcl tk
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run daily model
+        run: |
+          python -m src.run_daily --forms-dir forms --date today
+
+      - name: Commit reports
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
+          git add reports || true
+          git commit -m "chore: add daily reports" || echo "nothing to commit"
+          git push
