@@ -2,7 +2,7 @@ name: Daily Greyhound Run
 
 on:
   schedule:
-    # ~08:00 AEST/AEDT (two crons cover both offsets)
+    # Run daily around 08:00 AEST/AEDT (two crons to cover daylight saving changes)
     - cron: "0 22 * * *"
     - cron: "0 21 * * *"
   workflow_dispatch: {}
@@ -13,10 +13,12 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
+    env:
+      TZ: Australia/Sydney
+
     steps:
       - uses: actions/checkout@v4
 
-      # System packages needed by camelot/pdf tools
       - name: Install system deps
         run: |
           sudo apt-get update
