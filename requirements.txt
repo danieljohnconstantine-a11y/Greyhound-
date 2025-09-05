@@ -1,5 +1,8 @@
-requests
-beautifulsoup4
-lxml
-pandas
-pdfminer.six
+pandas>=2.2
+numpy>=1.26
+scikit-learn>=1.4
+pdfplumber>=0.11
+PyMuPDF>=1.24
+camelot-py[cv]>=0.11
+python-dateutil>=2.9
+loguru>=0.7
