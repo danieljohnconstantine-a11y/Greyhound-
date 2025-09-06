@@ -1,32 +1,41 @@
 name: Odds API — List Sports
 
 on:
-  workflow_dispatch: {}
-
-permissions:
-  contents: read
+  workflow_dispatch:
 
 jobs:
   list-sports:
     runs-on: ubuntu-latest
     steps:
-      - name: Call /v4/sports and print any likely greyhound keys
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install requests
+        run: pip install requests
+
+      - name: Fetch sports from Odds API
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: |
-          set -e
-          echo "Querying The Odds API /v4/sports ..."
-          curl -s "https://api.the-odds-api.com/v4/sports/?apiKey=${ODDS_API_KEY}&all=true" | tee sports.json
+          mkdir -p data
+          curl -s "https://api.the-odds-api.com/v4/sports/?apiKey=$ODDS_API_KEY" \
+            | tee data/sports.json
 
-          echo
-          echo "---- Possible greyhound / racing related entries ----"
-          # show any lines that might indicate greyhounds or racing in your plan
-          grep -Ei '"group"|\"title\"|\"key\"' sports.json | grep -Ei 'grey|racing|dogs|aus|australia' || true
-
-          echo
-          echo "Full file saved as artifacts for review."
-      - name: Upload sports.json
+      - name: Upload sports.json artifact
         uses: actions/upload-artifact@v4
         with:
-          name: oddsapi-sports
-          path: sports.json
+          name: sports-list
+          path: data/sports.json
+
+      - name: Commit sports.json back to repo
+        run: |
+          git config --local user.name "actions-user"
+          git config --local user.email "actions@github.com"
+          git add data/sports.json
+          git commit -m "Update sports list from Odds API"
+          git push
