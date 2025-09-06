@@ -1,18 +1,21 @@
 name: Make Bets
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
+  # (optional) run every day at 06:05 AEST
+  # schedule:
+  #   - cron: "05 20 * * *"
+
+permissions:
+  contents: write
 
 jobs:
   make-bets:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write   # allow committing bets.csv back to the repo
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -22,13 +25,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # Build probabilities so reports/latest/probabilities.csv exists
       - name: Run daily model (build probabilities.csv)
         run: python -m src.run_daily
 
+      # Fetch Odds API prices using the new odds_client args
       - name: Fetch odds (Odds API)
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: |
+          mkdir -p data/odds
           python -m src.odds_client \
             --sport greyhounds \
             --regions au \
@@ -37,21 +43,27 @@ jobs:
             --out-dir data/odds \
             --api-key "$ODDS_API_KEY"
 
+      # Join probabilities to prices and write bets.csv
       - name: Make bets (produce bets.csv)
         run: |
+          mkdir -p reports/latest
           python -m src.make_bets \
             --probs reports/latest/probabilities.csv \
-            --odds data/odds \
-            --out reports/latest/bets.csv
+            --odds  data/odds \
+            --out   reports/latest/bets.csv
 
+      # Save as GitHub Actions artifact (easy to download)
       - name: Upload bets artifact
         uses: actions/upload-artifact@v4
         with:
           name: bets-report
           path: reports/latest/bets.csv
 
+      # Commit bets.csv back to the repo
       - name: Commit bets.csv back to repo
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "chore: update bets.csv"
-          file_pattern: reports/latest/bets.csv
+        run: |
+          git config user.name "actions-user"
+          git config user.email "actions@github"
+          git add reports/latest/bets.csv || true
+          git commit -m "Add bets report (CI)" || echo "No changes to commit"
+          git push
