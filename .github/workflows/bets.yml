@@ -1,0 +1,36 @@
+name: Make Bets
+
+on:
+  workflow_dispatch:
+
+jobs:
+  make-bets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run daily model
+        run: python -m src.run_daily --date today
+
+      - name: Fetch odds
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: python -m src.odds_client --sport greyhounds --out data/odds/today.json
+
+      - name: Make bets
+        run: python -m src.make_bets --probs reports/latest/probabilities.csv --odds data/odds/today.json --out reports/latest/bets.csv
+
+      - name: Upload bets
+        uses: actions/upload-artifact@v4
+        with:
+          name: bets-report
+          path: reports/latest/bets.csv
