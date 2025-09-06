@@ -6,9 +6,13 @@ on:
 jobs:
   make-bets:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # allow committing bets.csv back to the repo
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -18,26 +22,36 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run daily model
+      - name: Run daily model (build probabilities.csv)
         run: python -m src.run_daily
 
-      - name: Fetch odds
+      - name: Fetch odds (Odds API)
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: |
           python -m src.odds_client \
-            --sport auto \
+            --sport greyhounds \
             --regions au \
             --markets h2h \
             --date today \
             --out-dir data/odds \
             --api-key "$ODDS_API_KEY"
 
-      - name: Make bets
-        run: python -m src.make_bets --probs reports/latest/probabilities.csv --odds data/odds --out reports/latest/bets.csv
+      - name: Make bets (produce bets.csv)
+        run: |
+          python -m src.make_bets \
+            --probs reports/latest/probabilities.csv \
+            --odds data/odds \
+            --out reports/latest/bets.csv
 
-      - name: Upload bets
+      - name: Upload bets artifact
         uses: actions/upload-artifact@v4
         with:
           name: bets-report
           path: reports/latest/bets.csv
+
+      - name: Commit bets.csv back to repo
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: update bets.csv"
+          file_pattern: reports/latest/bets.csv
