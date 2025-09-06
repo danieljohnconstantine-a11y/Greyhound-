@@ -1,61 +1,76 @@
-import os, json, argparse
+# src/make_bets.py
+import argparse
+import os
+import json
 import pandas as pd
 
-def load_probabilities(path: str) -> pd.DataFrame:
-    return pd.read_csv(path)
-
-def load_odds(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-def compute_value_bets(probs: pd.DataFrame, odds_data: dict, min_edge: float = 0.05):
-    """
-    Compare model probabilities with market odds.
-    A 'value bet' is when our prob > implied prob by margin `min_edge`.
-    """
+def load_odds(odds_dir: str) -> pd.DataFrame:
+    """Load all odds JSON files into a DataFrame."""
     rows = []
-    for ev in odds_data.get("events", []):
-        comp = (ev.get("bookmakers") or [{}])[0]
-        for market in comp.get("markets", []):
-            for outcome in market.get("outcomes", []):
-                runner = outcome["name"]
-                price = outcome.get("price")
-                if not price:
-                    continue
-                implied = 1.0 / price
-
-                # match against probs.csv
-                match = probs[probs["runner"].str.contains(runner, case=False, na=False)]
-                if match.empty:
-                    continue
-                model_p = match.iloc[0]["prob_win"]
-
-                edge = model_p - implied
-                if edge > min_edge:
-                    rows.append({
-                        "runner": runner,
-                        "model_prob": round(model_p, 3),
-                        "implied_prob": round(implied, 3),
-                        "odds": price,
-                        "edge": round(edge, 3)
-                    })
+    for fname in os.listdir(odds_dir):
+        if not fname.endswith(".json"):
+            continue
+        path = os.path.join(odds_dir, fname)
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # expected Odds API format: events -> bookmakers -> markets -> outcomes
+        for ev in data.get("events", []):
+            sport = ev.get("sport_key")
+            commence = ev.get("commence_time")
+            for bm in ev.get("bookmakers", []):
+                bookie = bm["title"]
+                for market in bm.get("markets", []):
+                    market_key = market.get("key")
+                    for outcome in market.get("outcomes", []):
+                        rows.append({
+                            "sport": sport,
+                            "commence_time": commence,
+                            "bookmaker": bookie,
+                            "market": market_key,
+                            "name": outcome.get("name"),
+                            "price": outcome.get("price"),
+                        })
     return pd.DataFrame(rows)
 
+
+def make_bets(prob_csv: str, odds_dir: str, out_csv: str):
+    """Merge probabilities with odds and compute expected value."""
+    probs = pd.read_csv(prob_csv)
+    odds = load_odds(odds_dir)
+
+    if probs.empty or odds.empty:
+        print("No data available to make bets.")
+        return
+
+    # Simple join on runner name
+    merged = probs.merge(
+        odds, left_on="runner", right_on="name", how="inner"
+    )
+
+    # Expected Value (EV) = p_win * price
+    merged["expected_value"] = merged["prob_win"] * merged["price"]
+
+    # Only keep strong bets (EV > 1.05 for example)
+    best = merged[merged["expected_value"] > 1.05].copy()
+    best.sort_values("expected_value", ascending=False, inplace=True)
+
+    os.makedirs(os.path.dirname(out_csv), exist_ok=True)
+    best.to_csv(out_csv, index=False)
+    print(f"Saved bets to {out_csv}")
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Generate bets from probs + odds")
+    p.add_argument("--probs", required=True, help="Path to probabilities.csv")
+    p.add_argument("--odds", required=True, help="Directory with odds JSONs")
+    p.add_argument("--out", required=True, help="Output bets.csv")
+    return p.parse_args()
+
+
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--probs", default="reports/latest/probabilities.csv")
-    ap.add_argument("--odds", default="data/odds/today.json")
-    ap.add_argument("--out", default="reports/latest/bets.csv")
-    args = ap.parse_args()
+    args = parse_args()
+    make_bets(args.probs, args.odds, args.out)
 
-    probs = load_probabilities(args.probs)
-    odds = load_odds(args.odds)
-
-    bets = compute_value_bets(probs, odds)
-    os.makedirs(os.path.dirname(args.out), exist_ok=True)
-    bets.to_csv(args.out, index=False)
-
-    print(f"Saved {len(bets)} recommended bets -> {args.out}")
 
 if __name__ == "__main__":
     main()
