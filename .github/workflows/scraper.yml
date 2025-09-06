@@ -2,24 +2,36 @@ name: Run Greyhound Scraper
 
 on:
   schedule:
-    - cron: "0 4 * * *"   # runs every day at 4:00 UTC (~2pm AEST)
-  workflow_dispatch:      # lets you run manually
+    - cron: "5 22 * * *"   # ~08:05 AEST
+    - cron: "5 21 * * *"   # ~08:05 AEDT
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
 
 jobs:
-  build:
+  scrape:
     runs-on: ubuntu-latest
-
+    env:
+      TZ: Australia/Sydney
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
+          python-version: "3.11"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
       - name: Run scraper
-        run: python scraper.py
+        run: |
+          # adjust to your actual scraper command/file
+          python scraper.py
+      - name: Commit scraped outputs (if any)
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
+          git add -A forms data || true
+          git commit -m "chore(scraper): update data" || echo "nothing to commit"
+          git push
