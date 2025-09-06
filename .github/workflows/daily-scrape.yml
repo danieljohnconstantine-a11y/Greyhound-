@@ -1,48 +1,37 @@
-name: Daily greyhound scrape
+name: Daily scrape (secondary)
 
 on:
   schedule:
-    - cron: "0 2 * * *"   # Runs every day 02:00 UTC
-  workflow_dispatch: {}   # Manual run allowed
+    - cron: "10 22 * * *"  # ~08:10 AEST
+    - cron: "10 21 * * *"  # ~08:10 AEDT
+  workflow_dispatch: {}
 
 permissions:
   contents: write
 
 jobs:
-  scrape:
+  run:
     runs-on: ubuntu-latest
+    env:
+      TZ: Australia/Sydney
     steps:
-      - name: Check out repo
-        uses: actions/checkout@v4
-
-      - name: Set up Python
+      - uses: actions/checkout@v4
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
-      - name: Install dependencies
+      - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-
-      - name: Run scraper
-        run: python scraper.py
-
-      - name: Commit PDFs (if any)
+          pip install -r requirements.txt
+      - name: Run daily scrape task
         run: |
+          # if this is duplicate of scraper.py, you can remove this whole workflow later
+          python scraper.py || true
+      - name: Commit outputs (if any)
+        run: |
+          git config user.email "actions@github.com"
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add forms/*.pdf || true
-          if git diff --cached --quiet; then
-            echo "No new PDFs to commit."
-          else
-            git commit -m "Add today's form PDFs"
-            git push
-          fi
-
-      - name: Upload PDFs as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: form-pdfs
-          path: forms/*.pdf
-          if-no-files-found: warn
+          git add -A forms data || true
+          git commit -m "chore(daily-scrape): update data" || echo "nothing to commit"
+          git push
