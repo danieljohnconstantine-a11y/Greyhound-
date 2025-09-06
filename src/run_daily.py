@@ -1,224 +1,192 @@
 # src/run_daily.py
-"""
-Daily pipeline:
-- read PDFs in forms/ (optionally filtered to a target date)
-- extract raw text (pdfminer.six)
-- parse runners with src.parse_pdf.parse_form_pdf(...)
-- group runners into races using box order (1..8)
-- build simple features & a naive probability model
-- write reports/{YYYY-MM-DD}/probabilities.csv and summary.md
-- save raw text to reports/{date}/debug/<PDF>.txt for regex tuning
-
-Run locally or in GitHub Actions:
-  python -m src.run_daily --forms-dir forms --date today
-  python -m src.run_daily --forms-dir forms --date 2025-09-06
-"""
-
-from __future__ import annotations
 import argparse
 import os
 import re
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import List, Dict, Any
+from datetime import datetime, timezone, timedelta
+from typing import List, Dict, Tuple
 
-import numpy as np
 import pandas as pd
 from pdfminer.high_level import extract_text
 
-# our parser (you already created this)
+# our parser
 from .parse_pdf import parse_form_pdf
 
 
-# -----------------------------
-# Helpers
-# -----------------------------
-DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
-
-def today_yyyymmdd() -> str:
-    # Use UTC to match GitHub Actions runner date; adjust if you prefer AU time
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-def get_target_date(date_arg: str) -> str:
-    if date_arg.lower() == "today":
-        return today_yyyymmdd()
-    m = DATE_RE.search(date_arg)
-    if not m:
-        raise SystemExit(f"--date must be 'today' or YYYY-MM-DD, got: {date_arg}")
-    return m.group(1)
-
-def pick_track_and_date_from_filename(filename: str) -> (str, str | None):
-    """
-    Expect names like CANN_2025-09-06.pdf or RICH_2025-09-05.pdf
-    Returns (track, date_str|None)
-    """
-    stem = Path(filename).stem
-    parts = stem.split("_")
-    track = parts[0] if parts else stem
-    date_match = DATE_RE.search(stem)
-    return track, (date_match.group(1) if date_match else None)
-
-def group_into_races(parsed_lines: List[Dict[str, Any]]) -> List[int]:
-    """
-    Assign race_id by detecting box==1 as a new race boundary.
-    Works for common forms that list runners in box order per race.
-    """
-    race_ids = []
-    race_idx = 1
-    last_box = None
-    for row in parsed_lines:
-        box = row.get("box")
-        if box == 1 and last_box is not None:
-            race_idx += 1
-        race_ids.append(race_idx)
-        last_box = box
-    return race_ids
-
-def simple_prob_from_box(box: int) -> float:
-    """
-    Very naive prior based on box (inside bias).
-    Tune later once you have richer features.
-    """
-    # Box 1 best → highest score; Box 8 lowest
-    base = {1: 1.20, 2: 1.12, 3: 1.06, 4: 1.00, 5: 0.96, 6: 0.92, 7: 0.90, 8: 0.88}
-    return base.get(int(box), 1.0)
-
-# -----------------------------
-# Core pipeline
-# -----------------------------
-def process_pdf(pdf_path: Path, report_debug_dir: Path) -> pd.DataFrame:
-    """
-    Extract text, parse runners, add race grouping & basic features.
-    Returns a DataFrame with columns:
-      track, date, race, box, runner, prior_score
-    """
-    raw_text = extract_text(str(pdf_path)) or ""
-    track, inferred_date = pick_track_and_date_from_filename(pdf_path.name)
-
-    parsed = parse_form_pdf(
-        raw_text,
-        debug_path=str(report_debug_dir),
-        pdf_name=pdf_path.stem
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Build daily greyhound probabilities from form PDFs.")
+    p.add_argument("--forms-dir", default="forms", help="Folder containing form PDFs")
+    p.add_argument(
+        "--date",
+        default="today",
+        help='Date to process: "today" or YYYY-MM-DD (must match PDF filenames)',
     )
+    return p.parse_args()
 
-    if not parsed:
-        # Return empty DF but leave a debug text file for inspection
-        return pd.DataFrame(columns=["track", "date", "race", "box", "runner", "prior_score"])
 
-    # Assign race ids
-    race_ids = group_into_races(parsed)
+def resolve_date(date_arg: str) -> str:
+    if date_arg.lower() == "today":
+        # Australian eastern time (roughly; avoids rolling into previous UTC day)
+        aedt = timezone(timedelta(hours=10))
+        return datetime.now(aedt).strftime("%Y-%m-%d")
+    return date_arg
 
-    rows = []
-    for row, race_id in zip(parsed, race_ids):
-        box = int(row["box"])
-        runner = str(row["runner"]).strip()
-        rows.append({
-            "track": track,
-            "date": inferred_date,
-            "race": race_id,
-            "box": box,
-            "runner": runner,
-            "prior_score": simple_prob_from_box(box)
-        })
+
+def find_pdfs(forms_dir: str, ymd: str) -> List[str]:
+    """Return absolute paths for PDFs whose filenames contain _YYYY-MM-DD.pdf."""
+    if not os.path.isdir(forms_dir):
+        return []
+    hits = []
+    suffix = f"_{ymd}.pdf"
+    for name in os.listdir(forms_dir):
+        if name.upper().endswith(".PDF") and suffix in name:
+            hits.append(os.path.join(forms_dir, name))
+    return sorted(hits)
+
+
+def split_text_by_race(raw_text: str) -> List[Tuple[int, str]]:
+    """
+    Try to split a meeting PDF into (race_number, text_block) pairs.
+    If no race headers are found, return a single block with race 1.
+    """
+    lines = raw_text.splitlines()
+    # Regex captures "Race 5", "RACE 10", "Race 1 –", etc.
+    race_hdr = re.compile(r"^\s*RACE\s*(\d+)\b", re.IGNORECASE)
+
+    blocks: List[Tuple[int, List[str]]] = []
+    current_race = None
+    current_lines: List[str] = []
+
+    for ln in lines:
+        m = race_hdr.match(ln)
+        if m:
+            # flush previous block
+            if current_race is not None and current_lines:
+                blocks.append((current_race, current_lines))
+            current_race = int(m.group(1))
+            current_lines = []
+        else:
+            if current_race is None:
+                # haven’t seen a header yet; keep collecting in case there are none
+                current_race = 1
+            current_lines.append(ln)
+
+    if current_race is not None and current_lines:
+        blocks.append((current_race, current_lines))
+
+    if not blocks:
+        # fallback: the whole text is one race
+        return [(1, raw_text)]
+    return [(rn, "\n".join(blines)) for rn, blines in blocks]
+
+
+def process_pdf(pdf_path: str, ymd: str, debug_root: str) -> pd.DataFrame:
+    """
+    Extract runners from a single PDF and return a DataFrame with columns:
+    [track, date, race, box, runner]
+    """
+    fname = os.path.basename(pdf_path)
+    # Track code = leading letters before underscore (e.g., "CANN_2025-09-06.pdf")
+    track = fname.split("_")[0]
+
+    try:
+        text = extract_text(pdf_path) or ""
+    except Exception as e:
+        print(f"[warn] Failed to read PDF {fname}: {e}")
+        return pd.DataFrame(columns=["track", "date", "race", "box", "runner"])
+
+    pieces = split_text_by_race(text)
+    rows: List[Dict] = []
+
+    for race_no, race_text in pieces:
+        # write raw per-race text for debugging
+        race_debug_dir = os.path.join(debug_root, track, f"race_{race_no:02d}")
+        runners = parse_form_pdf(race_text, debug_path=race_debug_dir, pdf_name=fname)
+
+        for r in runners:
+            rows.append(
+                {
+                    "track": track,
+                    "date": ymd,
+                    "race": race_no,
+                    "box": r.get("box"),
+                    "runner": r.get("runner"),
+                }
+            )
+
+    if not rows:
+        print(f"[warn] No runners parsed from: {fname} (raw text saved to {os.path.join(debug_root, track)})")
 
     return pd.DataFrame(rows)
 
 
-def to_probabilities(df: pd.DataFrame) -> pd.DataFrame:
+def assign_equal_probabilities(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Convert prior_score to probabilities within each (track, race).
+    Assign simple equal-win probabilities within each (track, date, race) group.
+    This is a baseline so the pipeline always produces an output even if
+    advanced features aren’t available.
     """
     if df.empty:
-        return df.assign(prob=np.nan, rank=np.nan)
+        df["prob_win"] = []
+        return df
 
-    out = []
-    for (track, race), g in df.groupby(["track", "race"], sort=True):
-        scores = g["prior_score"].replace(0, 1e-6).to_numpy(dtype=float)
-        probs = scores / scores.sum()
-        sub = g.copy()
-        sub["prob"] = probs
-        sub["rank"] = sub["prob"].rank(ascending=False, method="min").astype(int)
-        out.append(sub)
+    df = df.copy()
+    df["prob_win"] = 0.0
+    group_cols = ["track", "date", "race"]
 
-    return pd.concat(out, ignore_index=True) if out else df
+    def _set_probs(g: pd.DataFrame) -> pd.DataFrame:
+        n = max(len(g), 1)
+        g["prob_win"] = 1.0 / n
+        return g
+
+    return df.groupby(group_cols, as_index=False, group_keys=False).apply(_set_probs)
 
 
-def write_summary(probs: pd.DataFrame, pdf_files: List[str], summary_md: Path) -> None:
-    lines = []
-    date_str = probs["date"].dropna().iloc[0] if not probs.empty else today_yyyymmdd()
-    lines.append(f"# Summary – {date_str}")
-    lines.append("")
-    lines.append(f"PDFs: {pdf_files}")
-    lines.append("")
-    lines.append("## Top pick per race")
-    lines.append("")
-    if probs.empty:
-        lines.append("_No runners parsed. Check `debug/` text dumps for format._")
-    else:
-        for (track, race), g in probs.groupby(["track", "race"], sort=True):
-            top = g.sort_values("prob", ascending=False).iloc[0]
-            p = f"{top['prob']:.2%}"
-            lines.append(f"- **{track} R{race}** — **{top['runner']}** (Box {top['box']}, {p})")
-    summary_md.write_text("\n".join(lines), encoding="utf-8")
+def write_reports(all_probs: pd.DataFrame, out_dir: str, pdf_names: List[str]) -> None:
+    os.makedirs(out_dir, exist_ok=True)
+
+    # probabilities.csv
+    prob_path = os.path.join(out_dir, "probabilities.csv")
+    all_probs.sort_values(["track", "race", "box"], inplace=True)
+    all_probs.to_csv(prob_path, index=False)
+    print(f"Saved {prob_path}")
+
+    # summary.md
+    md_path = os.path.join(out_dir, "summary.md")
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write(f"# Summary — {os.path.basename(out_dir)}\n\n")
+        f.write(f"**PDFs processed ({len(pdf_names)}):** {pdf_names}\n\n")
+
+        if all_probs.empty:
+            f.write("_No runners parsed._\n")
+        else:
+            f.write("## Top pick per race (uniform baseline)\n\n")
+            for (track, race), g in all_probs.groupby(["track", "race"]):
+                # pick the smallest box (tie-breaker) since probs are uniform
+                pick = g.sort_values(["prob_win", "box"], ascending=[False, True]).iloc[0]
+                f.write(f"- **{track} R{int(race)}** → Box {int(pick['box'])} — {pick['runner']}  "
+                        f"(p={pick['prob_win']:.3f})\n")
+    print(f"Saved {md_path}")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--forms-dir", default="forms", help="Directory with form PDFs")
-    parser.add_argument("--date", default="today", help="'today' or YYYY-MM-DD")
-    args = parser.parse_args()
+    args = parse_args()
+    ymd = resolve_date(args.date)
 
-    target_date = get_target_date(args.date)
-
-    repo_root = Path(__file__).resolve().parents[1]  # project root
-    forms_dir = (repo_root / args.forms_dir).resolve()
-    if not forms_dir.exists():
-        raise SystemExit(f"Forms directory not found: {forms_dir}")
-
-    # Collect PDFs (filter by date token in filename)
-    pdfs = sorted(p for p in forms_dir.glob("*.pdf") if target_date in p.name)
-
-    # Safety: if none found for target_date, fall back to all PDFs
+    pdfs = find_pdfs(args.forms_dir, ymd)
     if not pdfs:
-        pdfs = sorted(forms_dir.glob("*.pdf"))
+        print("Parser found no PDFs for the day.")
+        return 2
 
-    report_dir = (repo_root / "reports" / target_date).resolve()
-    report_dir.mkdir(parents=True, exist_ok=True)
-    debug_dir = report_dir / "debug"
-    debug_dir.mkdir(parents=True, exist_ok=True)
+    reports_dir = os.path.join("reports", ymd)
+    debug_dir = os.path.join("debug", ymd)
 
-    # Process each PDF → concatenate
-    frames = []
-    pdf_names = []
-    for pdf in pdfs:
-        try:
-            df = process_pdf(pdf, debug_dir)
-            if not df.empty:
-                # Fill date with target if filename lacked it
-                if "date" not in df or df["date"].isna().all():
-                    df["date"] = target_date
-                frames.append(df)
-            pdf_names.append(pdf.name)
-        except Exception as e:
-            # Leave a note in debug and continue with other files
-            (debug_dir / f"{pdf.stem}.error.txt").write_text(str(e), encoding="utf-8")
+    frames: List[pd.DataFrame] = []
+    for p in pdfs:
+        frames.append(process_pdf(p, ymd, debug_dir))
 
-    if frames:
-        combined = pd.concat(frames, ignore_index=True)
-    else:
-        combined = pd.DataFrame(columns=["track", "date", "race", "box", "runner", "prior_score"])
-
-    probs = to_probabilities(combined)
-
-    # Save artifacts
-    probabilities_csv = report_dir / "probabilities.csv"
-    summary_md = report_dir / "summary.md"
-    probs.sort_values(["track", "race", "rank"], inplace=True, ignore_index=True)
-    probs.to_csv(probabilities_csv, index=False)
-    write_summary(probs, pdf_names, summary_md)
-
-    print(f"Saved {probabilities_csv.relative_to(repo_root)}")
-    print(f"Saved {summary_md.relative_to(repo_root)}")
+    all_df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["track", "date", "race", "box", "runner"])
+    all_probs = assign_equal_probabilities(all_df)
+    write_reports(all_probs, reports_dir, [os.path.basename(p) for p in pdfs])
     return 0
 
 
