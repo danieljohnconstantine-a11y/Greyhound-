@@ -22,19 +22,20 @@ def main() -> int:
     run_date = resolve_run_date(args.date)
     forms_dir = Path(args.forms_dir)
     out_dir = ensure_dir(Path("reports") / run_date.strftime("%Y-%m-%d"))
+    debug_dir = ensure_dir(out_dir / "debug")  # raw text dumps if needed
 
-    # 1) Find PDFs for the date (or recent if filename doesn't have date)
     pdfs = newest_form_for_date(forms_dir, run_date)
     if not pdfs:
         print(f"No PDFs found in '{forms_dir}' for {run_date}")
         return 2
 
-    # 2) Parse each PDF
     parsed_list = []
     for pdf in pdfs:
-        df = parse_form_pdf(pdf)
+        df = parse_form_pdf(pdf, debug_out=debug_dir)
         if not df.empty:
             parsed_list.append(df)
+        else:
+            print(f"[warn] No runners parsed from: {pdf.name} (raw text saved to debug/)")
 
     if not parsed_list:
         print("Parser found no runners.")
@@ -42,16 +43,13 @@ def main() -> int:
 
     parsed = pd.concat(parsed_list, ignore_index=True)
 
-    # 3) Build features and probabilities
     feats = build_features(parsed)
     probs = predict_probabilities(feats)
 
-    # 4) Save probabilities
     probs_out = out_dir / "probabilities.csv"
     probs.to_csv(probs_out, index=False)
     print(f"Saved {probs_out}")
 
-    # 5) Optional value bets if odds file provided
     if args.odds_file:
         try:
             odds_df = load_odds_csv(Path(args.odds_file))
@@ -62,7 +60,6 @@ def main() -> int:
         except Exception as e:
             print(f"Skipping bets (odds problem): {e}")
 
-    # 6) Simple summary
     md = out_dir / "summary.md"
     top = (
         probs.sort_values(["race", "prob"], ascending=[True, False])
