@@ -2,9 +2,9 @@ name: Daily Greyhound Run
 
 on:
   schedule:
-    # Run daily around 08:00 AEST/AEDT (two crons to cover daylight saving changes)
-    - cron: "0 22 * * *"
-    - cron: "0 21 * * *"
+    # Run daily around 08:20 AEST/AEDT (two crons to cover daylight saving changes)
+    - cron: "20 22 * * *"   # ~08:20 AEST (UTC+10)
+    - cron: "20 21 * * *"   # ~08:20 AEDT (UTC+11)
   workflow_dispatch: {}
 
 permissions:
@@ -42,6 +42,7 @@ jobs:
         run: |
           git config user.email "actions@github.com"
           git config user.name "github-actions[bot]"
-          git add reports || true
+          ls -R reports || true
+          git add -A reports
           git commit -m "chore: add daily reports" || echo "nothing to commit"
           git push
