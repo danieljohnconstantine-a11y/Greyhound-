@@ -1,0 +1,32 @@
+name: Odds API — List Sports
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  list-sports:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call /v4/sports and print any likely greyhound keys
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: |
+          set -e
+          echo "Querying The Odds API /v4/sports ..."
+          curl -s "https://api.the-odds-api.com/v4/sports/?apiKey=${ODDS_API_KEY}&all=true" | tee sports.json
+
+          echo
+          echo "---- Possible greyhound / racing related entries ----"
+          # show any lines that might indicate greyhounds or racing in your plan
+          grep -Ei '"group"|\"title\"|\"key\"' sports.json | grep -Ei 'grey|racing|dogs|aus|australia' || true
+
+          echo
+          echo "Full file saved as artifacts for review."
+      - name: Upload sports.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: oddsapi-sports
+          path: sports.json
