@@ -5,9 +5,9 @@ __pycache__/
 *.pyd
 *.so
 *.egg-info/
-.dist/
-build/
 dist/
+build/
+.eggs/
 .python-version
 
 # --- Environments / tools ---
@@ -17,23 +17,36 @@ env/
 .env
 .idea/
 .vscode/
-.DS_Store
 
-# --- Project data we don't want in git ---
-forms/
-data/
-debug/
+# --- OS junk ---
+.DS_Store
+Thumbs.db
+
+# --- Testing / coverage / type-check ---
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# --- Notebooks ---
+.ipynb_checkpoints/
+
+# --- Logs / misc temp ---
+*.log
 tmp/
 cache/
 
-# --- Keep GitHub workflow files ---
-!.github/
-!.github/workflows/
+# --- Data dumps (raw odds, API responses, scratch) ---
+data/
+!data/.gitkeep  # keep placeholder if you want (optional)
 
-# --- Reports: ignore everything by default...
+# --- Debug output from PDF parsing ---
+debug/
+
+# --- Reports ---
+# Ignore all reports by default...
 reports/
-
-# ...but keep the "latest" folder and the files we publish
+# ...but keep the latest daily outputs so Actions can commit them
 !reports/latest/
 !reports/latest/*.csv
 !reports/latest/*.md
