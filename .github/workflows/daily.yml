@@ -1,48 +1,123 @@
 name: Daily Greyhound Run
 
 on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Run date: 'today' or YYYY-MM-DD"
+        required: false
+        default: today
+      forms_dir:
+        description: "Folder with form PDFs"
+        required: false
+        default: forms
   schedule:
-    # Run daily around 08:20 AEST/AEDT (two crons to cover daylight saving changes)
-    - cron: "20 22 * * *"   # ~08:20 AEST (UTC+10)
-    - cron: "20 21 * * *"   # ~08:20 AEDT (UTC+11)
-  workflow_dispatch: {}
+    # 06:20 Australia/Sydney ≈ 20:20 UTC (adjust if you like)
+    - cron: "20 20 * * *"
 
 permissions:
-  contents: write
+  contents: write   # needed to commit reports/latest
+
+concurrency:
+  group: daily-greyhound-run
+  cancel-in-progress: false
 
 jobs:
   run:
     runs-on: ubuntu-latest
     env:
       TZ: Australia/Sydney
-
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install system deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ghostscript python3-tk tcl tk
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install Python deps
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install pdfminer.six pandas numpy requests
+          fi
+
+      # If you want this workflow to also fetch PDFs before running,
+      # keep this step. Otherwise, remove it and rely on your separate fetch workflow.
+      - name: (Optional) Fetch today's PDFs
+        env:
+          RUN_DATE: ${{ inputs.date || 'today' }}
+        run: |
+          set -e
+          mkdir -p forms
+          if [ -f fetch_forms.py ]; then
+            python fetch_forms.py --date "${RUN_DATE}" --out forms
+          elif [ -f src/fetch_forms.py ]; then
+            python -m src.fetch_forms --date "${RUN_DATE}" --out forms
+          else
+            echo "No fetch script found (fetch_forms.py or src/fetch_forms.py). Skipping fetch."
+          fi
+          echo "Forms folder after fetch:"
+          ls -la forms || true
 
       - name: Run daily model
+        env:
+          RUN_DATE: ${{ inputs.date || 'today' }}
+          FORMS_DIR: ${{ inputs.forms_dir || 'forms' }}
         run: |
-          python -m src.run_daily --forms-dir forms --date today
+          set -e
+          python -m src.run_daily --forms-dir "${FORMS_DIR}" --date "${RUN_DATE}"
+          echo "Reports generated:"
+          ls -la reports || true
+          # Print tail of summary for quick visibility
+          latest_dir="$(ls -1d reports/*/ 2>/dev/null | sed 's:/$::' | sort | tail -n1)"
+          echo "Latest reports dir: $latest_dir"
+          if [ -n "$latest_dir" ] && [ -f "$latest_dir/summary.md" ]; then
+            echo "----- summary.md (tail) -----"
+            tail -n 50 "$latest_dir/summary.md" || true
+            echo "-----------------------------"
+          fi
 
-      - name: Commit reports
+      - name: Copy today’s reports into reports/latest and commit
         run: |
+          set -e
+          latest_dir="$(ls -1d reports/*/ 2>/dev/null | grep -v 'latest/' | sed 's:/$::' | sort | tail -n1)"
+          echo "Latest reports dir: $latest_dir"
+          mkdir -p reports/latest
+          if [ -n "$latest_dir" ]; then
+            cp -f "$latest_dir/probabilities.csv" reports/latest/probabilities.csv || true
+            cp -f "$latest_dir/summary.md"        reports/latest/summary.md        || true
+          fi
+
+          git config user.name  "actions-bot"
           git config user.email "actions@github.com"
-          git config user.name "github-actions[bot]"
-          ls -R reports || true
-          git add -A reports
-          git commit -m "chore: add daily reports" || echo "nothing to commit"
-          git push
+          if [[ -n "$(git status --porcelain reports/latest)" ]]; then
+            git add reports/latest
+            git commit -m "Update latest reports from $latest_dir"
+            git push
+          else
+            echo "No changes to reports/latest"
+          fi
+
+      - name: Upload reports as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports
+          path: |
+            reports/**
+          if-no-files-found: warn
+
+      - name: Upload debug (if present)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug
+          path: |
+            debug/**
+          if-no-files-found: ignore
