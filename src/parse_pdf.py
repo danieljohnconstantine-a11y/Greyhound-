@@ -1,12 +1,11 @@
 import os
 import re
 
-def parse_pdf_text(text, debug_path=None, pdf_name="unknown.pdf"):
+def parse_form_pdf(text, debug_path=None, pdf_name="unknown.pdf"):
     """
-    Parse greyhound runners from raw PDF text.
-    Saves raw text to debug_path for inspection if provided.
+    Extract greyhound runner details from raw PDF text.
+    Saves raw text into debug/ for troubleshooting.
     """
-
     # Save raw text for debugging
     if debug_path:
         os.makedirs(debug_path, exist_ok=True)
@@ -14,11 +13,10 @@ def parse_pdf_text(text, debug_path=None, pdf_name="unknown.pdf"):
         with open(debug_file, "w", encoding="utf-8") as f:
             f.write(text)
 
-    # Try to extract lines like "1. Runner Name", "Box 2 RunnerName", etc.
     runners = []
     for line in text.splitlines():
         line = line.strip()
-        # Common race card patterns
+        # Match "Box 1 Runner Name", "1. Runner Name", etc.
         m = re.match(r"^(?:Box\s*)?(\d+)[\.\)]?\s+([A-Za-z' -]+)", line)
         if m:
             box = int(m.group(1))
