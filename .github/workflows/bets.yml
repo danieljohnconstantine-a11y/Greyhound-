@@ -26,8 +26,12 @@ jobs:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: |
           mkdir -p data/odds
+          # Extract the correct sport key for greyhounds from data/sports.json
+          SPORT_KEY=$(jq -r '.[] | select(.title | test("Greyhound"; "i")) | .key' data/sports.json | head -n 1)
+          echo "Using SPORT_KEY=$SPORT_KEY"
+
           python -m src.odds_client \
-            --sport greyhound_racing_aus \
+            --sport $SPORT_KEY \
             --regions au \
             --markets h2h \
             --date today \
