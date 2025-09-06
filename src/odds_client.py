@@ -1,127 +1,71 @@
 # src/odds_client.py
-from __future__ import annotations
-
 import argparse
-import json
 import os
-import sys
-import time
-from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
-
 import requests
-
-API_ROOT = "https://api.the-odds-api.com/v4"
-
-
-def _today_aet() -> str:
-    """YYYY-MM-DD in Australia Eastern Time (+10)."""
-    tz = timezone(timedelta(hours=10))
-    return datetime.now(tz).strftime("%Y-%m-%d")
+import json
+import time
 
 
-def _norm_date(s: str) -> str:
-    return _today_aet() if s.lower() == "today" else s
+def fetch_odds(api_key: str, sport_key: str, regions: str, markets: str, date: str) -> dict:
+    """
+    Fetch odds from The Odds API.
+    """
+    url = (
+        f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds"
+        f"?apiKey={api_key}&regions={regions}&markets={markets}"
+        f"&oddsFormat=decimal&dateFormat=iso"
+    )
+    print(f"[info] Requesting: {url}")
+
+    resp = requests.get(url, timeout=15)
+    resp.raise_for_status()
+    return resp.json()
 
 
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Fetch odds from The Odds API and save JSON.")
-    p.add_argument("--api-key", required=True, help="The Odds API key")
-    p.add_argument("--out-dir", default="data/odds", help="Output directory")
-    p.add_argument("--date", default="today", help='YYYY-MM-DD or "today" (AET)')
+def save_json(data: dict, out_path: str):
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    print(f"[info] Saved odds to {out_path}")
 
-    # Flexible filters (now supported)
-    p.add_argument("--sport", default="greyhounds",
-                   help='Sport key or hint (e.g. "greyhounds")')
-    p.add_argument("--regions", default="au",
-                   help="Comma-separated regions (e.g. au,uk,us)")
-    p.add_argument("--markets", default="h2h",
-                   help="Comma-separated markets (e.g. h2h,spreads,totals)")
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Fetch odds from The Odds API")
+    p.add_argument("--api-key", required=True, help="API key for The Odds API")
+    p.add_argument("--sport", required=True, help="Sport key (e.g. greyhound_racing_aus)")
+    p.add_argument("--regions", default="au", help="Regions to include")
+    p.add_argument("--markets", default="h2h", help="Markets to include")
+    p.add_argument("--date", default="today", help="Date (today or YYYY-MM-DD)")
+    p.add_argument("--out-dir", required=True, help="Directory to store results")
     return p.parse_args()
-
-
-def _get(url: str, params: Dict[str, Any]) -> Any:
-    r = requests.get(url, params=params, timeout=30)
-    r.raise_for_status()
-    return r.json()
-
-
-def resolve_sport_key(api_key: string, hint: str) -> Optional[str]:
-    """
-    Resolve a sport key from a human hint by listing /sports.
-    Returns the first sport whose key or title contains the hint (case-insensitive).
-    """
-    try:
-        sports = _get(f"{API_ROOT}/sports", {"apiKey": api_key})
-    except Exception as e:
-        print(f"[warn] Could not list sports: {e}", file=sys.stderr)
-        return None
-
-    h = hint.strip().lower().replace(" ", "_")
-    for s in sports:
-        key = (s.get("key") or "").lower()
-        title = (s.get("title") or "").lower()
-        if h in key or h in title:
-            return s.get("key")
-    return None
-
-
-def fetch_odds(api_key: str, sport_key: str, regions: str, markets: str) -> List[Dict[str, Any]]:
-    params = {
-        "apiKey": api_key,
-        "regions": regions,
-        "markets": markets,
-        "oddsFormat": "decimal",
-        "dateFormat": "iso",
-    }
-    url = f"{API_ROOT}/sports/{sport_key}/odds"
-    return _get(url, params)  # list of events
-
-
-def filter_events_by_date(events: List[Dict[str, Any]], ymd: str) -> List[Dict[str, Any]]:
-    out = []
-    for ev in events:
-        ct = ev.get("commence_time", "")
-        if isinstance(ct, str) and ct[:10] == ymd:
-            out.append(ev)
-    return out
-
-
-def save_json(obj: Any, path: str) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=2)
-    print(f"Saved {path}")
 
 
 def main() -> int:
     args = parse_args()
-    ymd = _norm_date(args.date)
 
-    # Resolve sport key (fallback to cleaned hint if not found)
-    sport_key = resolve_sport_key(args.api_key, args.sport) or args.sport.strip().lower().replace(" ", "_")
-    print(f"Using sport key: {sport_key}")
+    if not args.sport or args.sport == "null":
+        print("[error] No valid sport key provided. Please check data/sports.json.")
+        return 2
 
     try:
-        events = fetch_odds(args.api_key, sport_key, args.regions, args.markets)
+        events = fetch_odds(args.api_key, args.sport, args.regions, args.markets, args.date)
     except requests.HTTPError as e:
-        print(f"[error] HTTPError: {e}", file=sys.stderr)
+        print(f"[error] HTTPError: {e}")
         return 2
     except Exception as e:
-        print(f"[error] Fetch failed: {e}", file=sys.stderr)
+        print(f"[error] Fetch failed: {e}")
         return 2
 
-    # 1) raw dump with timestamp (for auditing)
+    # Save timestamped dump
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    raw_path = os.path.join(args.out_dir, f"{sport_key}_{stamp}.json")
+    raw_path = os.path.join(args.out_dir, f"events-raw-{stamp}.json")
     save_json({"events": events}, raw_path)
 
-    # 2) stable, date-filtered dump used by downstream steps
-    filtered = filter_events_by_date(events, ymd)
-    stable_path = os.path.join(args.out_dir, f"{sport_key}_{ymd}.json")
-    save_json({"events": filtered}, stable_path)
+    # Save stable (latest) dump
+    stable_path = os.path.join(args.out_dir, "events.json")
+    save_json({"events": events}, stable_path)
 
-    print(f"Fetched events: {len(events)} | For {ymd}: {len(filtered)}")
+    print(f"[info] Fetched {len(events)} events")
     return 0
 
 
