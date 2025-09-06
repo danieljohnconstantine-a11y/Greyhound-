@@ -19,15 +19,22 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run daily model
-        run: python -m src.run_daily --date today
+        run: python -m src.run_daily
 
       - name: Fetch odds
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-        run: python -m src.odds_client --sport greyhounds --out data/odds/today.json
+        run: |
+          python -m src.odds_client \
+            --sport auto \
+            --regions au \
+            --markets h2h \
+            --date today \
+            --out-dir data/odds \
+            --api-key "$ODDS_API_KEY"
 
       - name: Make bets
-        run: python -m src.make_bets --probs reports/latest/probabilities.csv --odds data/odds/today.json --out reports/latest/bets.csv
+        run: python -m src.make_bets --probs reports/latest/probabilities.csv --odds data/odds --out reports/latest/bets.csv
 
       - name: Upload bets
         uses: actions/upload-artifact@v4
