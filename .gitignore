@@ -1,6 +1,40 @@
-.venv/
+# --- Python basics ---
 __pycache__/
-*.pyc
-data/**
-!data/.gitkeep
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.dist/
+build/
+dist/
+.python-version
+
+# --- Environments / tools ---
+.venv/
+venv/
+env/
 .env
+.idea/
+.vscode/
+.DS_Store
+
+# --- Project data we don't want in git ---
+forms/
+data/
+debug/
+tmp/
+cache/
+
+# --- Keep GitHub workflow files ---
+!.github/
+!.github/workflows/
+
+# --- Reports: ignore everything by default...
+reports/
+
+# ...but keep the "latest" folder and the files we publish
+!reports/latest/
+!reports/latest/*.csv
+!reports/latest/*.md
+!reports/latest/sports.json
