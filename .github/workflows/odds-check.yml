@@ -1,7 +1,14 @@
-name: Odds API — List Sports
+name: Odds API — List Sports (daily)
 
 on:
+  schedule:
+    # Runs once per day at 00:00 UTC (adjust if you want a different time)
+    - cron: "0 0 * * *"
   workflow_dispatch:
+
+# Make sure this workflow can push back to the repo
+permissions:
+  contents: write
 
 jobs:
   list-sports:
@@ -10,32 +17,50 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
+      - name: Ensure tools (jq for a quick sanity check)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq
 
-      - name: Install requests
-        run: pip install requests
+      - name: Make data folder
+        run: mkdir -p data
 
       - name: Fetch sports from Odds API
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: |
-          mkdir -p data
-          curl -s "https://api.the-odds-api.com/v4/sports/?apiKey=$ODDS_API_KEY" \
-            | tee data/sports.json
+          set -euo pipefail
+          URL="https://api.the-odds-api.com/v4/sports/?all=true&apiKey=${ODDS_API_KEY}"
+          echo "Fetching: $URL"
+          # Save JSON to file and capture status
+          STATUS=$(curl -sS -w "%{http_code}" -o data/sports.json "$URL")
+          echo "HTTP status: $STATUS"
+          if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 300 ]; then
+            echo "Request failed with status $STATUS"
+            exit 1
+          fi
+          # quick parse check (won't fail the job if shape differs)
+          jq '.[0] | {key, title}' data/sports.json || true
 
       - name: Upload sports.json artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sports-list
+          name: sports-json
           path: data/sports.json
+          if-no-files-found: error
 
-      - name: Commit sports.json back to repo
+      - name: Commit sports.json back to repo (only if changed)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config --local user.name "actions-user"
-          git config --local user.email "actions@github.com"
-          git add data/sports.json
-          git commit -m "Update sports list from Odds API"
+          set -e
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Force-add even if ignored by .gitignore
+          git add -f data/sports.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "chore: update data/sports.json from Odds API [skip ci]"
           git push
