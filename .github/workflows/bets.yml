@@ -1,11 +1,14 @@
 name: Make Bets
 
 on:
+  # run by hand from the Actions tab
   workflow_dispatch:
+  # uncomment to run automatically every day at 08:05 AEST (23:05 UTC)
+  # schedule:
+  #   - cron: "05 23 * * *"
 
-# Needed so the workflow can push changes back to the repo
 permissions:
-  contents: write
+  contents: write   # needed so we can commit bets.csv back to the repo
 
 jobs:
   make-bets:
@@ -26,37 +29,100 @@ jobs:
       - name: Run daily model (build probabilities.csv)
         run: python -m src.run_daily
 
+      # --- Get a sports list if data/sports.json is missing (no commit) ---
+      - name: Ensure sports list exists (download if missing)
+        if: ${{ !hashFiles('data/sports.json') }}
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: |
+          mkdir -p data
+          python - << 'PY'
+          import json, os, sys, urllib.request
+          api_key = os.environ.get("ODDS_API_KEY", "")
+          if not api_key:
+              print("No ODDS_API_KEY provided", file=sys.stderr)
+              sys.exit(1)
+          url = f"https://api.the-odds-api.com/v4/sports?apiKey={api_key}"
+          with urllib.request.urlopen(url) as r:
+              data = json.loads(r.read().decode("utf-8"))
+          with open("data/sports.json","w",encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False)
+          print("sports.json downloaded to data/sports.json")
+          PY
+
+      # --- Resolve the exact greyhound sport key from sports.json ---
+      - name: Resolve greyhound sport key from sports.json
+        id: resolve_sport
+        run: |
+          sport=$(python - << 'PY'
+          import json, sys
+          from pathlib import Path
+
+          p = Path("data/sports.json")
+          if not p.exists():
+              print("data/sports.json not found", file=sys.stderr)
+              sys.exit(1)
+
+          data = json.loads(p.read_text(encoding="utf-8"))
+
+          # candidates that mention 'greyhound'
+          cands = [s for s in data
+                   if "greyhound" in (s.get("key","").lower()
+                                      + s.get("title","").lower())]
+
+          if not cands:
+              print("No greyhound sport found in sports.json", file=sys.stderr)
+              sys.exit(2)
+
+          # prefer Australian key if present (e.g. greyhound_racing_aus)
+          def score(s):
+              k = (s.get("key","") + " " + s.get("title","")).lower()
+              sc = 0
+              if "aus" in k or "australia" in k: sc += 10
+              if "racing" in k: sc += 2
+              return sc
+
+          cands.sort(key=score, reverse=True)
+          print(cands[0]["key"])
+          PY
+          )
+          echo "SPORT_KEY=$sport" >> $GITHUB_ENV
+          echo "Resolved SPORT_KEY=$sport"
+
+      # --- Fetch odds using the resolved key ---
       - name: Fetch odds (Odds API)
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: |
           mkdir -p data/odds
           python -m src.odds_client \
-            --sport greyhound_racing_aus \
+            --sport "${{ env.SPORT_KEY }}" \
             --regions au \
             --markets h2h \
             --date today \
             --out-dir data/odds \
             --api-key "$ODDS_API_KEY"
 
+      # --- Join probs + odds and produce bets.csv ---
       - name: Make bets (produce bets.csv)
         run: |
-          mkdir -p reports/latest
           python -m src.make_bets \
             --probs reports/latest/probabilities.csv \
             --odds data/odds \
             --out reports/latest/bets.csv
 
+      # keep a downloadable artifact copy
       - name: Upload bets artifact
         uses: actions/upload-artifact@v4
         with:
           name: bets-report
           path: reports/latest/bets.csv
 
+      # commit bets.csv back to repo
       - name: Commit bets.csv back to repo
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "actions-user"
+          git config --local user.email "actions@github.com"
           git add reports/latest/bets.csv
-          git commit -m "Add latest bets report" || echo "No changes to commit"
+          git commit -m "Add latest bets report" || echo "Nothing to commit"
           git push
