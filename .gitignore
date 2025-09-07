@@ -7,7 +7,6 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-.eggs/
 .python-version
 
 # --- Environments / tools ---
@@ -17,37 +16,12 @@ env/
 .env
 .idea/
 .vscode/
-
-# --- OS junk ---
 .DS_Store
-Thumbs.db
 
-# --- Testing / coverage / type-check ---
-.pytest_cache/
-.coverage
-htmlcov/
-.mypy_cache/
+# --- Data files ---
+data/*
+!data/sports.json   # Allow sports.json to be committed
 
-# --- Notebooks ---
-.ipynb_checkpoints/
-
-# --- Logs / misc temp ---
-*.log
-tmp/
-cache/
-
-# --- Data dumps (raw odds, API responses, scratch) ---
-data/
-!data/.gitkeep  # keep placeholder if you want (optional)
-
-# --- Debug output from PDF parsing ---
-debug/
-
-# --- Reports ---
-# Ignore all reports by default...
-reports/
-# ...but keep the latest daily outputs so Actions can commit them
-!reports/latest/
-!reports/latest/*.csv
-!reports/latest/*.md
-!reports/latest/sports.json
+# --- Reports (keep only final CSVs if you want) ---
+reports/*.tmp
+reports/*.bak
