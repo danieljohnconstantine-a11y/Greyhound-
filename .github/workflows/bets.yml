@@ -1,14 +1,13 @@
-name: Make Bets
+name: Make Bets (auto greyhound key)
 
 on:
-  # run by hand from the Actions tab
   workflow_dispatch:
-  # uncomment to run automatically every day at 08:05 AEST (23:05 UTC)
-  # schedule:
-  #   - cron: "05 23 * * *"
+  schedule:
+    - cron: "0 2 * * *"   # daily 02:00 UTC
 
 permissions:
-  contents: write   # needed so we can commit bets.csv back to the repo
+  contents: write
+  actions: read
 
 jobs:
   make-bets:
@@ -29,100 +28,101 @@ jobs:
       - name: Run daily model (build probabilities.csv)
         run: python -m src.run_daily
 
-      # --- Get a sports list if data/sports.json is missing (no commit) ---
       - name: Ensure sports list exists (download if missing)
-        if: ${{ !hashFiles('data/sports.json') }}
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        shell: bash
         run: |
+          set -e
           mkdir -p data
-          python - << 'PY'
-          import json, os, sys, urllib.request
-          api_key = os.environ.get("ODDS_API_KEY", "")
-          if not api_key:
-              print("No ODDS_API_KEY provided", file=sys.stderr)
-              sys.exit(1)
-          url = f"https://api.the-odds-api.com/v4/sports?apiKey={api_key}"
-          with urllib.request.urlopen(url) as r:
-              data = json.loads(r.read().decode("utf-8"))
-          with open("data/sports.json","w",encoding="utf-8") as f:
-              json.dump(data, f, ensure_ascii=False)
-          print("sports.json downloaded to data/sports.json")
-          PY
+          if [ ! -f data/sports.json ]; then
+            echo "[info] downloading data/sports.json"
+            curl -fsSL "https://api.the-odds-api.com/v4/sports/?apiKey=${ODDS_API_KEY}" -o data/sports.json
+          else
+            echo "[info] sports.json already present"
+          fi
 
-      # --- Resolve the exact greyhound sport key from sports.json ---
-      - name: Resolve greyhound sport key from sports.json
-        id: resolve_sport
+      - name: Resolve greyhound SPORT_KEY from sports.json
+        shell: bash
         run: |
-          sport=$(python - << 'PY'
-          import json, sys
-          from pathlib import Path
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, sys
+          p="data/sports.json"
+          try:
+            data=json.load(open(p,"r",encoding="utf-8"))
+          except Exception as e:
+            print(f"[error] cannot read {p}: {e}"); sys.exit(2)
 
-          p = Path("data/sports.json")
-          if not p.exists():
-              print("data/sports.json not found", file=sys.stderr)
-              sys.exit(1)
-
-          data = json.loads(p.read_text(encoding="utf-8"))
-
-          # candidates that mention 'greyhound'
-          cands = [s for s in data
-                   if "greyhound" in (s.get("key","").lower()
-                                      + s.get("title","").lower())]
+          cands=[]
+          for s in data:
+            key=(s.get("key") or "").lower()
+            title=(s.get("title") or "").lower()
+            group=(s.get("group") or "").lower()
+            if "greyhound" in key or "greyhound" in title or "greyhound" in group:
+              cands.append(s)
 
           if not cands:
-              print("No greyhound sport found in sports.json", file=sys.stderr)
-              sys.exit(2)
+            print("No greyhound sport found in sports.json")
+            print("First 40 keys:")
+            for s in data[:40]:
+              print(" -", s.get("key"))
+            sys.exit(2)
 
-          # prefer Australian key if present (e.g. greyhound_racing_aus)
-          def score(s):
-              k = (s.get("key","") + " " + s.get("title","")).lower()
-              sc = 0
-              if "aus" in k or "australia" in k: sc += 10
-              if "racing" in k: sc += 2
-              return sc
-
-          cands.sort(key=score, reverse=True)
-          print(cands[0]["key"])
+          # prefer AU if visible, else first candidate
+          pick = None
+          for s in cands:
+            k=(s.get("key") or "").lower()
+            if "aus" in k or k.endswith("_au") or "australia" in k:
+              pick=s; break
+          pick = pick or cands[0]
+          sport = pick.get("key")
+          print("[info] greyhound candidates:")
+          for s in cands:
+            print(f" - key={s.get('key')} | title={s.get('title')} | group={s.get('group')}")
+          print(f"[info] Using SPORT_KEY={sport}")
+          with open(os.environ["GITHUB_ENV"],"a",encoding="utf-8") as f:
+            f.write(f"SPORT_KEY={sport}\n")
           PY
-          )
-          echo "SPORT_KEY=$sport" >> $GITHUB_ENV
-          echo "Resolved SPORT_KEY=$sport"
 
-      # --- Fetch odds using the resolved key ---
       - name: Fetch odds (Odds API)
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        shell: bash
         run: |
+          set -e
           mkdir -p data/odds
+          echo "[info] Requesting odds for ${SPORT_KEY}"
           python -m src.odds_client \
-            --sport "${{ env.SPORT_KEY }}" \
+            --sport "${SPORT_KEY}" \
             --regions au \
             --markets h2h \
             --date today \
             --out-dir data/odds \
-            --api-key "$ODDS_API_KEY"
+            --api-key "${ODDS_API_KEY}"
 
-      # --- Join probs + odds and produce bets.csv ---
       - name: Make bets (produce bets.csv)
+        shell: bash
         run: |
+          set -e
           python -m src.make_bets \
             --probs reports/latest/probabilities.csv \
             --odds data/odds \
             --out reports/latest/bets.csv
+          ls -l reports/latest/
 
-      # keep a downloadable artifact copy
       - name: Upload bets artifact
         uses: actions/upload-artifact@v4
         with:
           name: bets-report
           path: reports/latest/bets.csv
 
-      # commit bets.csv back to repo
       - name: Commit bets.csv back to repo
+        shell: bash
         run: |
+          set -e
           git config --local user.name "actions-user"
           git config --local user.email "actions@github.com"
           git add reports/latest/bets.csv
-          git commit -m "Add latest bets report" || echo "Nothing to commit"
-          git push
+          git commit -m "Add latest bets report" || echo "No changes to commit"
+          git push || echo "Nothing to push (likely no changes)"
