@@ -1,11 +1,7 @@
-# Summary — 2025-09-07
+# Summary — 2025-09-08
 
-**PDFs processed (5):** ['DRWN_2025-09-07.pdf', 'GRAF_2025-09-07.pdf', 'HEAL_2025-09-07.pdf', 'QSTR_2025-09-07.pdf', 'RICH_2025-09-07.pdf']
+**PDFs processed (1):** ['QSTR_2025-09-08.pdf']
 
 ## Top pick per race (uniform baseline)
 
-- **DRWN R1** → Box 0 — -  (p=0.015)
-- **GRAF R1** → Box 0 — -  (p=0.008)
-- **HEAL R1** → Box 1 — -  (p=0.008)
-- **QSTR R1** → Box 0 — -  (p=0.006)
-- **RICH R1** → Box 0 — -  (p=0.006)
+- **QSTR R1** → Box 2 — -  (p=0.043)
