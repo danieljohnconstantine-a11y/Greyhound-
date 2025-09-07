@@ -9,19 +9,52 @@ dist/
 build/
 .python-version
 
-# --- Environments / tools ---
+# --- Virtual environments / tools ---
 .venv/
 venv/
 env/
 .env
+
+# --- Editors / IDEs ---
 .idea/
 .vscode/
+
+# --- OS cruft ---
 .DS_Store
+Thumbs.db
 
-# --- Data files ---
+# --- Notebooks / caches / coverage ---
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# --- Logs / temp ---
+logs/
+*.log
+tmp/
+.cache/
+
+# --- Project-specific rules ---
+
+# Ignore everything in data/ ...
 data/*
-!data/sports.json   # Allow sports.json to be committed
 
-# --- Reports (keep only final CSVs if you want) ---
-reports/*.tmp
-reports/*.bak
+# ...but DO commit the sports list used by Actions
+!data/sports.json
+
+# (optional) keep a readme or placeholder if you want the folder tracked
+!data/README.md
+!data/.gitkeep
+
+# Keep all odds dumps ignored (large, noisy)
+data/odds/
+
+# Debug artefacts from parsing
+debug/
+
+# Allow reports to be committed (probabilities, summaries, bets)
+# (Do NOT ignore reports/; the workflows write reports here)
