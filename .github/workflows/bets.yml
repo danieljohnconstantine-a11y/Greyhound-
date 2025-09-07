@@ -3,9 +3,14 @@ name: Make Bets
 on:
   workflow_dispatch:
 
+# Needed so the workflow can push changes back to the repo
+permissions:
+  contents: write
+
 jobs:
   make-bets:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -26,12 +31,8 @@ jobs:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: |
           mkdir -p data/odds
-          # Extract the correct sport key for greyhounds from data/sports.json
-          SPORT_KEY=$(jq -r '.[] | select(.title | test("Greyhound"; "i")) | .key' data/sports.json | head -n 1)
-          echo "Using SPORT_KEY=$SPORT_KEY"
-
           python -m src.odds_client \
-            --sport $SPORT_KEY \
+            --sport greyhound_racing_aus \
             --regions au \
             --markets h2h \
             --date today \
@@ -40,6 +41,7 @@ jobs:
 
       - name: Make bets (produce bets.csv)
         run: |
+          mkdir -p reports/latest
           python -m src.make_bets \
             --probs reports/latest/probabilities.csv \
             --odds data/odds \
@@ -53,8 +55,8 @@ jobs:
 
       - name: Commit bets.csv back to repo
         run: |
-          git config --local user.name "actions-user"
-          git config --local user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add reports/latest/bets.csv
-          git commit -m "Add latest bets report"
+          git commit -m "Add latest bets report" || echo "No changes to commit"
           git push
