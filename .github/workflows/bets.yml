@@ -1,20 +1,12 @@
 name: Make Bets
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:   # run manually
   schedule:
-    - cron: "10 00 * * *"  # runs daily at 00:10 UTC (adjust as you like)
+    - cron: "0 0 * * *"   # run daily at midnight UTC
 
 permissions:
   contents: write
-
-env:
-  PYTHONUNBUFFERED: "1"
-  ODDS_API_BASE: "https://api.the-odds-api.com/v4"
-  REGION: "au"
-  MARKETS: "h2h"
-  DATE_FORMAT: "iso"
-  ODDS_FORMAT: "decimal"
 
 jobs:
   make-bets:
@@ -27,156 +19,52 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: '3.10'
 
-      - name: Install dependencies (lightweight)
-        run: |
-          python -m pip install --upgrade pip
-          pip install pandas requests
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
-      - name: Ensure folders
-        run: |
-          mkdir -p data data/odds reports/latest
-
-      - name: Run daily model (build probabilities.csv)
-        run: |
-          python - << 'PY'
-          from pathlib import Path
-          import pandas as pd
-
-          out = Path("data/probabilities.csv")
-          # Minimal placeholder: 3 runners with model probabilities
-          df = pd.DataFrame({
-              "runner": ["Dog A","Dog B","Dog C"],
-              "p_win":  [0.45, 0.35, 0.20]
-          })
-          out.parent.mkdir(parents=True, exist_ok=True)
-          df.to_csv(out, index=False)
-          print(f"[ok] wrote {out} with {len(df)} rows")
-          PY
-
-      - name: Resolve greyhound SPORT_KEY from data/sports.json (if present)
+      - name: Resolve greyhound SPORT_KEY from sports.json
         id: sport
         run: |
-          set -e
-          SPORT_KEY=""
-          if [ -f data/sports.json ]; then
-            SPORT_KEY=$(python - << 'PY'
-          import json, sys
-          with open("data/sports.json","r",encoding="utf-8") as f:
-              val=json.load(f)
-          # supports list or object
-          items = val if isinstance(val, list) else [val]
-          for s in items:
-              k=str(s.get("key","")).lower()
-              t=str(s.get("title","")).lower()
-              g=str(s.get("group","")).lower()
-              if "greyhound" in k or "greyhound" in t or "greyhound" in g:
-                  print(s["key"]); break
+          python - <<'PY'
+          import json
+          with open("data/sports.json") as f:
+              sports = json.load(f)
+          key = None
+          for s in sports:
+              if "greyhound" in s["key"].lower():
+                  key = s["key"]
+                  break
+          if not key:
+              raise SystemExit("No greyhound sport found in sports.json")
+          print(f"SPORT_KEY={key}")
+          with open(os.environ['GITHUB_ENV'], "a") as env:
+              env.write(f"SPORT_KEY={key}\n")
           PY
-          ) || true
-          fi
-          # Fallback if not found/empty
-          if [ -z "$SPORT_KEY" ]; then
-            # NOTE: this key may or may not exist for your API plan.
-            SPORT_KEY="greyhound_racing_aus"
-          fi
-          echo "SPORT_KEY=$SPORT_KEY" >> "$GITHUB_OUTPUT"
-          echo "[info] Using SPORT_KEY=$SPORT_KEY"
 
-      - name: Fetch odds (Odds API) — tolerant if 404/empty
-        env:
-          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      - name: Fetch odds (Odds API)
         run: |
-          set -e
-          SPORT="${{ steps.sport.outputs.SPORT_KEY }}"
-          if [ -z "$ODDS_API_KEY" ]; then
-            echo "[warn] No ODDS_API_KEY secret set; writing empty odds file"
-            echo '{"events":[]}' > data/odds/odds.json
-            exit 0
-          fi
+          mkdir -p data/odds
+          curl -s "https://api.the-odds-api.com/v4/sports/${SPORT_KEY}/odds?apiKey=${{ secrets.ODDS_API_KEY }}&regions=au&markets=h2h&oddsFormat=decimal&dateFormat=iso" \
+            -o data/odds/odds.json
 
-          URL="${ODDS_API_BASE}/sports/${SPORT}/odds?apiKey=${ODDS_API_KEY}&regions=${REGION}&markets=${MARKETS}&oddsFormat=${ODDS_FORMAT}&dateFormat=${DATE_FORMAT}"
-
-          echo "[info] Requesting: $URL"
-          # Try fetch; if API returns 404/4xx/5xx, write an empty file and continue
-          if ! curl -sS --fail "$URL" -o data/odds/odds.json ; then
-            echo "[warn] Odds fetch failed (likely sport not available). Writing empty odds."
-            echo '{"events":[]}' > data/odds/odds.json
-          fi
-
-          # Normalize to our expected wrapper shape for the downstream script
-          python - << 'PY'
-          import json,sys
-          from pathlib import Path
-          p=Path("data/odds/odds.json")
-          try:
-              data=json.loads(p.read_text(encoding="utf-8"))
-          except Exception:
-              data={"events":[]}
-          # If the file is already {"events":[...]}, keep it; if it's a list, wrap it.
-          if isinstance(data, list):
-              data={"events": data}
-          p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-          print(f"[ok] normalized odds file at {p}")
-          PY
+      - name: Run daily model (build probabilities.csv)
+        run: python src/model.py --output data/probabilities.csv
 
       - name: Make bets (produce bets.csv)
-        run: |
-          python - << 'PY'
-          import json
-          from pathlib import Path
-          import pandas as pd
-
-          probs = pd.read_csv("data/probabilities.csv")
-          odds_path = Path("data/odds/odds.json")
-          data = {"events": []}
-          if odds_path.exists():
-              try:
-                  data = json.loads(odds_path.read_text(encoding="utf-8"))
-              except Exception:
-                  data = {"events":[]}
-
-          # Convert odds (if any) into a flat DF of runner -> price
-          rows=[]
-          for ev in data.get("events",[]):
-              for bm in ev.get("bookmakers",[]):
-                  book = bm.get("title")
-                  for m in bm.get("markets",[]):
-                      if m.get("key")!="h2h": 
-                          continue
-                      for o in m.get("outcomes",[]):
-                          rows.append({"runner": o.get("name"), "price": o.get("price"), "bookmaker": book})
-          odds_df = pd.DataFrame(rows)
-
-          if odds_df.empty:
-              print("[warn] No odds available; creating empty bets file.")
-              Path("data/bets.csv").write_text("runner,bookmaker,stake,price,expected_value\n")
-          else:
-              # Join and compute a simple EV = p_win * price
-              merged = probs.merge(odds_df, on="runner", how="inner")
-              if merged.empty:
-                  Path("data/bets.csv").write_text("runner,bookmaker,stake,price,expected_value\n")
-              else:
-                  merged["expected_value"] = merged["p_win"] * merged["price"]
-                  # naive staking: fixed stake for candidates with EV > 1.05
-                  picks = merged.loc[merged["expected_value"]>1.05].copy()
-                  picks["stake"] = 1.0
-                  picks[["runner","bookmaker","stake","price","expected_value"]].to_csv("data/bets.csv", index=False)
-                  print(f"[ok] wrote data/bets.csv with {len(picks)} picks")
-          PY
+        run: python src/make_bets.py --input data/probabilities.csv --odds data/odds/odds.json --output data/bets.csv
 
       - name: Upload bets artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: bets
           path: data/bets.csv
 
       - name: Commit bets.csv back to repo
         run: |
-          set -e
           git config --local user.email "actions@github.com"
-          git config --local user.name  "actions-user"
-          git add data/bets.csv || true
-          git commit -m "Update bets.csv (auto)" || echo "nothing to commit"
+          git config --local user.name "GitHub Actions"
+          git add data/bets.csv
+          git commit -m "Update bets.csv" || echo "No changes to commit"
           git push
