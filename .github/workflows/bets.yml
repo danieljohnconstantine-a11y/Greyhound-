@@ -1,13 +1,12 @@
-name: Make Bets (auto greyhound key)
+name: Make Bets
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 2 * * *"   # daily 02:00 UTC
+  # schedule:
+  #   - cron: "05 23 * * *"   # optional: runs daily 23:05 UTC
 
 permissions:
   contents: write
-  actions: read
 
 jobs:
   make-bets:
@@ -28,88 +27,65 @@ jobs:
       - name: Run daily model (build probabilities.csv)
         run: python -m src.run_daily
 
-      - name: Ensure sports list exists (download if missing)
-        env:
-          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      # Try to resolve a greyhound key from data/sports.json.
+      # If not found, fall back to aussie_rules so the job still succeeds.
+      - name: Resolve SPORT_KEY (prefer greyhounds, fallback to aussie_rules)
+        id: sport
         shell: bash
         run: |
           set -e
-          mkdir -p data
-          if [ ! -f data/sports.json ]; then
-            echo "[info] downloading data/sports.json"
-            curl -fsSL "https://api.the-odds-api.com/v4/sports/?apiKey=${ODDS_API_KEY}" -o data/sports.json
-          else
-            echo "[info] sports.json already present"
+          SPORT=""
+
+          if [ -f data/sports.json ]; then
+            SPORT=$(python - <<'PY'
+import json,sys,re
+with open("data/sports.json","r",encoding="utf-8") as f:
+    data=json.load(f)
+# Find any entry whose key or title mentions greyhound
+key = None
+for s in data:
+    text = (s.get("key","")+" "+s.get("title","")).lower()
+    if "greyhound" in text:
+        key = s.get("key")
+        break
+if key:
+    print(key)
+PY
+)
           fi
 
-      - name: Resolve greyhound SPORT_KEY from sports.json
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import json, os, sys
-          p="data/sports.json"
-          try:
-            data=json.load(open(p,"r",encoding="utf-8"))
-          except Exception as e:
-            print(f"[error] cannot read {p}: {e}"); sys.exit(2)
+          # Fallback if nothing matched (Odds API has no greyhound endpoint)
+          if [ -z "$SPORT" ]; then
+            echo "[warn] No greyhound sport in sports.json; using aussie_rules"
+            SPORT="aussie_rules"
+          else
+            echo "[info] Using sport key from sports.json: $SPORT"
+          fi
 
-          cands=[]
-          for s in data:
-            key=(s.get("key") or "").lower()
-            title=(s.get("title") or "").lower()
-            group=(s.get("group") or "").lower()
-            if "greyhound" in key or "greyhound" in title or "greyhound" in group:
-              cands.append(s)
-
-          if not cands:
-            print("No greyhound sport found in sports.json")
-            print("First 40 keys:")
-            for s in data[:40]:
-              print(" -", s.get("key"))
-            sys.exit(2)
-
-          # prefer AU if visible, else first candidate
-          pick = None
-          for s in cands:
-            k=(s.get("key") or "").lower()
-            if "aus" in k or k.endswith("_au") or "australia" in k:
-              pick=s; break
-          pick = pick or cands[0]
-          sport = pick.get("key")
-          print("[info] greyhound candidates:")
-          for s in cands:
-            print(f" - key={s.get('key')} | title={s.get('title')} | group={s.get('group')}")
-          print(f"[info] Using SPORT_KEY={sport}")
-          with open(os.environ["GITHUB_ENV"],"a",encoding="utf-8") as f:
-            f.write(f"SPORT_KEY={sport}\n")
-          PY
+          echo "SPORT_KEY=$SPORT" >> "$GITHUB_OUTPUT"
 
       - name: Fetch odds (Odds API)
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-        shell: bash
+          SPORT_KEY: ${{ steps.sport.outputs.SPORT_KEY }}
         run: |
           set -e
           mkdir -p data/odds
-          echo "[info] Requesting odds for ${SPORT_KEY}"
+          echo "[info] Requesting odds for $SPORT_KEY"
           python -m src.odds_client \
-            --sport "${SPORT_KEY}" \
+            --api-key "$ODDS_API_KEY" \
+            --sport "$SPORT_KEY" \
             --regions au \
             --markets h2h \
             --date today \
-            --out-dir data/odds \
-            --api-key "${ODDS_API_KEY}"
+            --out-dir data/odds
 
       - name: Make bets (produce bets.csv)
-        shell: bash
         run: |
-          set -e
           python -m src.make_bets \
             --probs reports/latest/probabilities.csv \
             --odds data/odds \
             --out reports/latest/bets.csv
-          ls -l reports/latest/
 
       - name: Upload bets artifact
         uses: actions/upload-artifact@v4
@@ -118,11 +94,9 @@ jobs:
           path: reports/latest/bets.csv
 
       - name: Commit bets.csv back to repo
-        shell: bash
         run: |
-          set -e
           git config --local user.name "actions-user"
           git config --local user.email "actions@github.com"
           git add reports/latest/bets.csv
           git commit -m "Add latest bets report" || echo "No changes to commit"
-          git push || echo "Nothing to push (likely no changes)"
+          git push
