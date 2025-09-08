@@ -1,9 +1,9 @@
 name: Make Bets
 
 on:
-  workflow_dispatch:   # run manually
+  workflow_dispatch:   # allows you to run it manually
   schedule:
-    - cron: "0 0 * * *"   # run daily at midnight UTC
+    - cron: "0 0 * * *"   # runs daily at midnight UTC (adjust if needed)
 
 permissions:
   contents: write
@@ -19,29 +19,34 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run daily model (build probabilities.csv)
+        run: python src/model.py --output data/probabilities.csv
 
       - name: Resolve greyhound SPORT_KEY from sports.json
-        id: sport
+        id: sportkey
         run: |
-          python - <<'PY'
-          import json
-          with open("data/sports.json") as f:
-              sports = json.load(f)
-          key = None
-          for s in sports:
-              if "greyhound" in s["key"].lower():
-                  key = s["key"]
-                  break
-          if not key:
-              raise SystemExit("No greyhound sport found in sports.json")
-          print(f"SPORT_KEY={key}")
-          with open(os.environ['GITHUB_ENV'], "a") as env:
-              env.write(f"SPORT_KEY={key}\n")
-          PY
+          sport=$(python - <<'PY'
+import json
+with open("data/sports.json") as f:
+    sports = json.load(f)
+for s in sports:
+    if "greyhound" in s["key"]:
+        print(s["key"])
+        break
+PY
+          )
+          if [ -z "$sport" ]; then
+            echo "No greyhound sport found in sports.json"
+            exit 1
+          fi
+          echo "SPORT_KEY=$sport" >> $GITHUB_ENV
 
       - name: Fetch odds (Odds API)
         run: |
@@ -49,22 +54,19 @@ jobs:
           curl -s "https://api.the-odds-api.com/v4/sports/${SPORT_KEY}/odds?apiKey=${{ secrets.ODDS_API_KEY }}&regions=au&markets=h2h&oddsFormat=decimal&dateFormat=iso" \
             -o data/odds/odds.json
 
-      - name: Run daily model (build probabilities.csv)
-        run: python src/model.py --output data/probabilities.csv
-
       - name: Make bets (produce bets.csv)
-        run: python src/make_bets.py --input data/probabilities.csv --odds data/odds/odds.json --output data/bets.csv
+        run: python src/make_bets.py --odds data/odds/odds.json --probs data/probabilities.csv --output data/bets.csv
 
       - name: Upload bets artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4   # ✅ fixed version
         with:
           name: bets
           path: data/bets.csv
 
       - name: Commit bets.csv back to repo
         run: |
-          git config --local user.email "actions@github.com"
-          git config --local user.name "GitHub Actions"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
           git add data/bets.csv
-          git commit -m "Update bets.csv" || echo "No changes to commit"
+          git commit -m "Update bets.csv"
           git push
