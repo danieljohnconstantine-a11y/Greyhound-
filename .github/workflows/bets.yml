@@ -2,8 +2,6 @@ name: Make Bets
 
 on:
   workflow_dispatch:
-  # schedule:
-  #   - cron: "05 23 * * *"   # optional: runs daily 23:05 UTC
 
 permissions:
   contents: write
@@ -27,58 +25,18 @@ jobs:
       - name: Run daily model (build probabilities.csv)
         run: python -m src.run_daily
 
-      # Try to resolve a greyhound key from data/sports.json.
-      # If not found, fall back to aussie_rules so the job still succeeds.
-      - name: Resolve SPORT_KEY (prefer greyhounds, fallback to aussie_rules)
-        id: sport
-        shell: bash
-        run: |
-          set -e
-          SPORT=""
-
-          if [ -f data/sports.json ]; then
-            SPORT=$(python - <<'PY'
-import json,sys,re
-with open("data/sports.json","r",encoding="utf-8") as f:
-    data=json.load(f)
-# Find any entry whose key or title mentions greyhound
-key = None
-for s in data:
-    text = (s.get("key","")+" "+s.get("title","")).lower()
-    if "greyhound" in text:
-        key = s.get("key")
-        break
-if key:
-    print(key)
-PY
-)
-          fi
-
-          # Fallback if nothing matched (Odds API has no greyhound endpoint)
-          if [ -z "$SPORT" ]; then
-            echo "[warn] No greyhound sport in sports.json; using aussie_rules"
-            SPORT="aussie_rules"
-          else
-            echo "[info] Using sport key from sports.json: $SPORT"
-          fi
-
-          echo "SPORT_KEY=$SPORT" >> "$GITHUB_OUTPUT"
-
       - name: Fetch odds (Odds API)
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-          SPORT_KEY: ${{ steps.sport.outputs.SPORT_KEY }}
         run: |
-          set -e
           mkdir -p data/odds
-          echo "[info] Requesting odds for $SPORT_KEY"
           python -m src.odds_client \
-            --api-key "$ODDS_API_KEY" \
-            --sport "$SPORT_KEY" \
+            --sport aussie_rules \
             --regions au \
             --markets h2h \
             --date today \
-            --out-dir data/odds
+            --out-dir data/odds \
+            --api-key "$ODDS_API_KEY"
 
       - name: Make bets (produce bets.csv)
         run: |
