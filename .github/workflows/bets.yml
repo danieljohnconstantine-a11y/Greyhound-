@@ -1,7 +1,9 @@
 name: Make Bets
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}             # run from the Actions tab
+  schedule:
+    - cron: "05 23 * * *"           # optional: 23:05 UTC daily
 
 permissions:
   contents: write
@@ -9,8 +11,16 @@ permissions:
 jobs:
   make-bets:
     runs-on: ubuntu-latest
+    env:
+      ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      SPORT_KEY:    ${{ secrets.SPORT_KEY }}   # e.g. greyhound_racing_aus
+      REGIONS: au
+      MARKETS: h2h
+      ODDS_FORMAT: decimal
+      DATE_FORMAT: iso
+
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -20,114 +30,49 @@ jobs:
 
       - name: Install dependencies
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
+      - name: Prepare folders
+        run: |
+          set -euo pipefail
+          mkdir -p data data/odds
+
+      - name: Validate secrets
+        run: |
+          set -euo pipefail
+          [ -n "${ODDS_API_KEY:-}" ] || { echo "::error::ODDS_API_KEY is not set"; exit 2; }
+          [ -n "${SPORT_KEY:-}" ]    || { echo "::error::SPORT_KEY is not set";    exit 2; }
+
+      - name: Fetch odds (TheOddsAPI)
+        run: |
+          set -euo pipefail
+          URL="https://api.the-odds-api.com/v4/sports/${SPORT_KEY}/odds?apiKey=${ODDS_API_KEY}&regions=${REGIONS}&markets=${MARKETS}&oddsFormat=${ODDS_FORMAT}&dateFormat=${DATE_FORMAT}"
+          echo "[info] Requesting: ${URL}"
+          curl -fsSL "${URL}" -o data/odds/odds.json
+          test -s data/odds/odds.json || { echo "::error::Empty odds response"; exit 2; }
+          echo "[info] Saved -> data/odds/odds.json"
+
       - name: Run daily model (build probabilities.csv)
         run: |
-          set -e
-          mkdir -p data
-          python src/model.py
-
-      # If data/sports.json is missing, fetch it once using your ODDS_API_KEY
-      - name: Ensure sports list exists (download if missing)
-        env:
-          API_KEY: ${{ secrets.ODDS_API_KEY }}
-        run: |
           set -euo pipefail
-          if [ ! -s data/sports.json ]; then
-            if [ -z "${API_KEY:-}" ]; then
-              echo "sports.json missing and ODDS_API_KEY not set" >&2
-              exit 1
-            fi
-            echo "sports.json missing; fetching once..."
-            curl -sS "https://api.the-odds-api.com/v4/sports?apiKey=${API_KEY}" \
-              -o data/sports.json
+          if [ -f "src/model.py" ]; then
+            python src/model.py --output data/probabilities.csv || true
+          else
+            echo "[warn] src/model.py not found — skipping."
           fi
-
-      # Resolve greyhound sport key from sports.json or allow override via secret
-      - name: Resolve greyhound SPORT_KEY from sports.json (or use override)
-        id: sportkey
-        env:
-          SPORT_KEY_OVERRIDE: ${{ secrets.SPORT_KEY_OVERRIDE }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -n "${SPORT_KEY_OVERRIDE:-}" ]; then
-            echo "Using override key: ${SPORT_KEY_OVERRIDE}"
-            echo "SPORT_KEY=${SPORT_KEY_OVERRIDE}" >> $GITHUB_ENV
-            exit 0
-          fi
-
-          python - <<'PY'
-          import json, sys
-          with open("data/sports.json") as f:
-              sports = json.load(f)
-
-          # find entries that look like greyhound by title/group/key
-          cands = []
-          for s in sports:
-              t = (s.get("title") or "").lower()
-              g = (s.get("group") or "").lower()
-              k = (s.get("key") or "").lower()
-              if "greyhound" in t or "greyhound" in g or "greyhound" in k:
-                  cands.append(s)
-
-          if not cands:
-              print("No greyhound sport found in sports.json", file=sys.stderr)
-              sys.exit(2)
-
-          chosen = cands[0]
-          print("Resolved greyhound sport:", chosen)
-          print(f"SPORT_KEY={chosen['key']}")
-          PY | tee -a $GITHUB_ENV >/dev/null
-
-      - name: Fetch odds (Odds API)
-        env:
-          API_KEY: ${{ secrets.ODDS_API_KEY }}
-          SPORT_KEY: ${{ env.SPORT_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -z "${API_KEY:-}" ]; then
-            echo "ODDS_API_KEY secret is missing." >&2
-            exit 1
-          fi
-          if [ -z "${SPORT_KEY:-}" ]; then
-            echo "SPORT_KEY is empty; cannot query odds." >&2
-            exit 1
-          fi
-
-          mkdir -p data/odds
-          URL="https://api.the-odds-api.com/v4/sports/${SPORT_KEY}/odds?apiKey=${API_KEY}&regions=au&markets=h2h&oddsFormat=decimal&dateFormat=iso"
-          echo "[info] Requesting: ${URL//${API_KEY}/***}"
-          curl -sS "$URL" -o data/odds/odds.json
-
-          # quick validation to fail fast if we got HTML/empty
-          python - <<'PY'
-          import json, sys
-          data = open("data/odds/odds.json").read().strip()
-          if not data or data.startswith("<"):
-              print("Odds response looks wrong (empty/HTML).", file=sys.stderr)
-              sys.exit(2)
-          try:
-              j = json.loads(data)
-          except Exception as e:
-              print("Odds not JSON:", e, file=sys.stderr); sys.exit(2)
-          print("Odds entries:", len(j) if isinstance(j, list) else "not-a-list")
-          PY
 
       - name: Make bets (produce bets.csv)
         run: |
-          set -e
-          # use your script if present; otherwise write a placeholder csv
-          python src/make_bets.py || python - <<'PY'
-          import pandas as pd, pathlib, datetime as dt
-          p = pathlib.Path("data/bets.csv")
-          p.parent.mkdir(parents=True, exist_ok=True)
-          pd.DataFrame([{"timestamp":dt.datetime.utcnow().isoformat()+"Z",
-                         "note":"no make_bets.py yet"}]).to_csv(p, index=False)
-          print("Wrote", p)
-          PY
+          set -euo pipefail
+          if [ -f "src/make_bets.py" ]; then
+            python src/make_bets.py --odds data/odds/odds.json --output data/bets.csv
+            test -s data/bets.csv
+          else
+            echo "::error::src/make_bets.py not found."
+            exit 2
+          fi
 
       - name: Upload bets artifact
         uses: actions/upload-artifact@v4
@@ -135,12 +80,18 @@ jobs:
           name: bets
           path: data/bets.csv
           if-no-files-found: error
+          retention-days: 7
 
       - name: Commit bets.csv back to repo (optional)
+        if: ${{ github.ref == 'refs/heads/main' }}
         run: |
-          set -e
-          git config --local user.name "github-actions[bot]"
-          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          set -euo pipefail
+          git config --local user.email "actions@github.com"
+          git config --local user.name  "actions-bot"
           git add data/bets.csv || true
-          git commit -m "Update bets.csv" || echo "nothing to commit"
-          git push || echo "nothing to push"
+          if ! git diff --cached --quiet; then
+            git commit -m "Update bets.csv (auto)"
+            git push
+          else
+            echo "[info] No changes to commit."
+          fi
