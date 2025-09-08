@@ -1,0 +1,59 @@
+name: Odds API — List Sports (daily)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 4 * * *"  # 04:15 UTC daily (adjust as you like)
+
+permissions:
+  contents: write  # allow bot to commit sports.json
+
+jobs:
+  list-sports:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install requests
+        run: pip install requests
+
+      - name: Fetch sports from Odds API
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: |
+          mkdir -p data
+          python - << 'PY'
+          import json, os, requests
+          api_key = os.environ["ODDS_API_KEY"]
+          url = "https://api.the-odds-api.com/v4/sports/?all=true&apiKey=" + api_key
+          r = requests.get(url, timeout=30)
+          r.raise_for_status()
+          sports = r.json()
+          # Keep only small useful fields
+          trimmed = [
+            {
+              "key": s.get("key",""),
+              "group": s.get("group",""),
+              "title": s.get("title",""),
+              "description": s.get("description",""),
+            }
+            for s in sports
+          ]
+          with open("data/sports.json","w") as f:
+            json.dump(trimmed, f, indent=2)
+          print(f"Wrote {len(trimmed)} sports to data/sports.json")
+          PY
+
+      - name: Commit sports.json
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/sports.json
+          git commit -m "Update sports list from Odds API" || echo "No changes"
+          git push || true
