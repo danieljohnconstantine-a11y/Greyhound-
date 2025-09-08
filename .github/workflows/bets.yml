@@ -1,14 +1,12 @@
 name: Make Bets
 
 on:
-  # run by hand from the Actions tab
-  workflow_dispatch:
-  # or schedule it (UTC). Uncomment if you want it daily.
+  workflow_dispatch:  # allows manual "Run workflow" button
   # schedule:
-  #   - cron: "05 23 * * *"
+  #   - cron: "0 12 * * *"  # optional daily run at 12:00 UTC
 
 permissions:
-  contents: write   # needed to commit bets.csv back to the repo
+  contents: write
 
 jobs:
   make-bets:
@@ -19,25 +17,18 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: "3.10"
+          python-version: '3.x'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      # Keep this if your pipeline produces probabilities.csv
-      - name: Run daily model (build probabilities.csv)
-        run: python -m src.run_daily
-
-      - name: Ensure sports list exists (downloaded by the other workflow)
         run: |
-          if [ ! -f data/sports.json ]; then
-            echo "data/sports.json is missing. Run the 'Odds API — List Sports (daily)' workflow first."
-            exit 1
-          fi
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      # ----------- FIXED SECTION STARTS HERE -----------
+      - name: Run daily model (build probabilities.csv)
+        run: python src/model.py --output data/probabilities.csv
+
       - name: Resolve greyhound SPORT_KEY from sports.json
         run: |
           sport=$(python - <<'PY'
@@ -45,43 +36,28 @@ import json
 with open("data/sports.json") as f:
     sports = json.load(f)
 for s in sports:
-    # Match on title so we pick up "Greyhound Racing (AUS)"
-    if "greyhound" in s.get("title","").lower():
+    if "greyhound" in s["key"]:
         print(s["key"])
         break
 PY
-)
+          )
           if [ -z "$sport" ]; then
-            echo "No greyhound sport found in data/sports.json"
+            echo "No greyhound sport found in sports.json"
             exit 1
           fi
-          echo "Resolved SPORT_KEY=$sport"
           echo "SPORT_KEY=$sport" >> $GITHUB_ENV
 
       - name: Fetch odds (Odds API)
-        env:
-          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: |
           mkdir -p data/odds
-          echo "[info] Requesting odds for $SPORT_KEY"
-          curl -s "https://api.the-odds-api.com/v4/sports/$SPORT_KEY/odds?apiKey=${ODDS_API_KEY}&regions=au&markets=h2h&oddsFormat=decimal&dateFormat=iso" \
+          curl -s "https://api.the-odds-api.com/v4/sports/$SPORT_KEY/odds?apiKey=${{ secrets.ODDS_API_KEY }}&regions=au&markets=h2h&oddsFormat=decimal&dateFormat=iso" \
             -o data/odds/odds.json
-          # fail clearly if API returned an error/empty
-          if [ ! -s data/odds/odds.json ]; then
-            echo "Odds API response is empty. Check ODDS_API_KEY or SPORT_KEY."
-            exit 1
-          fi
-      # ----------- FIXED SECTION ENDS HERE -------------
 
       - name: Make bets (produce bets.csv)
-        run: |
-          python -m src.make_bets \
-            --probs reports/latest/probabilities.csv \
-            --odds data/odds \
-            --out data/bets.csv
+        run: python src/make_bets.py --input data/probabilities.csv --odds data/odds/odds.json --output data/bets.csv
 
       - name: Upload bets artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: bets
           path: data/bets.csv
@@ -89,7 +65,7 @@ PY
       - name: Commit bets.csv back to repo
         run: |
           git config --local user.email "actions@github.com"
-          git config --local user.name "actions-user"
+          git config --local user.name "github-actions"
           git add data/bets.csv
-          git commit -m "Update bets.csv from Make Bets" || echo "No changes to commit"
+          git commit -m "Update bets.csv"
           git push
