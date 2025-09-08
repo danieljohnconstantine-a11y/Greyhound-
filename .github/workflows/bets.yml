@@ -1,9 +1,9 @@
 name: Make Bets
 
 on:
-  workflow_dispatch:   # allows you to run manually
+  workflow_dispatch:   # allows manual runs
   schedule:
-    - cron: "0 3 * * *"   # runs daily at 3:00 UTC (change as needed)
+    - cron: "0 0 * * *"   # runs daily at midnight UTC
 
 permissions:
   contents: write
@@ -17,46 +17,63 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt || true
 
       - name: Run daily model (build probabilities.csv)
+        run: python src/model.py --output data/probabilities.csv
+
+      - name: Ensure sports list exists
         run: |
-          python model.py --output data/probabilities.csv
+          if [ ! -f data/sports.json ]; then
+            echo "sports.json missing! Add it first."
+            exit 1
+          fi
+
+      - name: Resolve greyhound SPORT_KEY from sports.json
+        id: sport_key
+        run: |
+          sport=$(python - <<'PY'
+import json
+with open("data/sports.json") as f:
+    sports = json.load(f)
+for s in sports:
+    if "greyhound" in s["key"]:
+        print(s["key"])
+        break
+PY
+)
+          if [ -z "$sport" ]; then
+            echo "No greyhound sport found in sports.json"
+            exit 1
+          fi
+          echo "SPORT_KEY=$sport" >> $GITHUB_ENV
 
       - name: Fetch odds (Odds API)
         run: |
           mkdir -p data/odds
-          python odds_client.py \
-            --api-key ${{ secrets.ODDS_API_KEY }} \
-            --sport greyhound_racing_aus \
-            --regions au \
-            --markets h2h \
-            --out-dir data/odds
+          curl -s "https://api.the-odds-api.com/v4/sports/${{ env.SPORT_KEY }}/odds?apiKey=${{ secrets.ODDS_API_KEY }}&regions=au&markets=h2h&oddsFormat=decimal&dateFormat=iso" \
+            -o data/odds/odds.json
 
       - name: Make bets (produce bets.csv)
-        run: |
-          python make_bets.py \
-            --model data/probabilities.csv \
-            --odds data/odds \
-            --output bets.csv
+        run: python src/make_bets.py --odds data/odds/odds.json --probs data/probabilities.csv --output data/bets.csv
 
       - name: Upload bets artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: bets
-          path: bets.csv
+          path: data/bets.csv
 
       - name: Commit bets.csv back to repo
         run: |
-          git config --local user.name "actions-user"
           git config --local user.email "actions@github.com"
-          git add bets.csv
-          git commit -m "Add daily bets.csv"
+          git config --local user.name "github-actions[bot]"
+          git add data/bets.csv
+          git commit -m "Update bets.csv" || echo "No changes to commit"
           git push
