@@ -1,14 +1,16 @@
-name: Ladbrokes Greyhound Auto
+name: Greyhounds — Auto Discover & Scrape (Ladbrokes)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
   schedule:
-    - cron: "0 4 * * *"  # runs daily at 04:00 UTC
+    - cron: "10 4 * * *"   # 04:10 UTC daily; change if you want
+
+permissions:
+  contents: write   # needed to commit outputs
 
 jobs:
-  ladbrokes:
+  scrape:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -16,18 +18,35 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 pandas
 
-      - name: Run Ladbrokes auto scraper
-        run: python src/ladbrokes_auto.py
+      - name: Ensure data folder
+        run: mkdir -p data
+
+      - name: Scrape Ladbrokes Greyhound meetings
+        run: |
+          set -euo pipefail
+          python src/ladbrokes_auto.py
+
+      - name: Upload artifacts (CSV + logs)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ladbrokes-outputs
+          path: |
+            data/ladbrokes_*.csv
+            data/ladbrokes_meetings_*.json
+            data/ladbrokes_log_*.txt
+          if-no-files-found: ignore
 
       - name: Commit results
         run: |
-          git config --local user.email "actions@github.com"
-          git config --local user.name "github-actions"
-          git add .
-          git commit -m "Update Ladbrokes greyhound results" || echo "No changes to commit"
+          git config --local user.email "bot@users.noreply.github.com"
+          git config --local user.name  "github-actions[bot]"
+          git add data/ladbrokes_*.csv data/ladbrokes_meetings_*.json || true
+          git commit -m "chore: add Ladbrokes greyhound scrape for $(date -u +%F)" || echo "Nothing to commit"
           git push
