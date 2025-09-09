@@ -1,0 +1,33 @@
+name: Ladbrokes Greyhound Auto
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * *"  # runs daily at 04:00 UTC
+
+jobs:
+  ladbrokes:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Ladbrokes auto scraper
+        run: python src/ladbrokes_auto.py
+
+      - name: Commit results
+        run: |
+          git config --local user.email "actions@github.com"
+          git config --local user.name "github-actions"
+          git add .
+          git commit -m "Update Ladbrokes greyhound results" || echo "No changes to commit"
+          git push
