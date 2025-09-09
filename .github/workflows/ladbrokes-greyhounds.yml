@@ -1,0 +1,98 @@
+name: Ladbrokes Greyhound Odds
+
+on:
+  workflow_dispatch: {}     # run manually
+  schedule:
+    - cron: "0 3 * * *"     # run daily 03:00 UTC (noon AEST)
+
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright pandas
+          python -m playwright install --with-deps chromium
+
+      - name: Ensure data folder
+        run: mkdir -p data
+
+      - name: Scrape Ladbrokes Greyhound meetings
+        env:
+          LAD_MEETINGS: ${{ vars.LAD_MEETINGS }}
+        run: |
+          python - <<'PY'
+          import os, json, re
+          from pathlib import Path
+          import pandas as pd
+          import asyncio
+          from playwright.async_api import async_playwright
+
+          meetings = [m.strip() for m in os.environ.get("LAD_MEETINGS","").split(",") if m.strip()]
+          if not meetings:
+              print("::error:: No LAD_MEETINGS provided.")
+              exit(1)
+
+          async def scrape_meeting(page, url):
+              await page.goto(url, wait_until="networkidle")
+              await page.wait_for_timeout(2000)
+              html = await page.content()
+              runners = []
+              # crude extraction: any "$" price-looking text with a name before it
+              for line in html.splitlines():
+                  line = line.strip()
+                  if "$" in line and len(line.split()) > 1:
+                      m = re.search(r"\$[0-9]+(\.[0-9]+)?", line)
+                      if m:
+                          price = m.group().replace("$","")
+                          name = line.replace(m.group(),"").strip()
+                          if name:
+                              runners.append({"runner": name, "price": price})
+              return {"url": url, "runners": runners}
+
+          async def main():
+              out = {"meetings":[]}
+              async with async_playwright() as p:
+                  browser = await p.chromium.launch(headless=True)
+                  page = await browser.new_page()
+                  for url in meetings:
+                      try:
+                          m = await scrape_meeting(page, url)
+                          out["meetings"].append(m)
+                      except Exception as e:
+                          out["meetings"].append({"url": url, "error": str(e)})
+                  await browser.close()
+              Path("data/ladbrokes_odds.json").write_text(json.dumps(out, indent=2))
+              rows = []
+              for m in out["meetings"]:
+                  for r in m.get("runners", []):
+                      rows.append({"meeting": m["url"], "runner": r["runner"], "price": r["price"]})
+              pd.DataFrame(rows).to_csv("data/ladbrokes_odds.csv", index=False)
+
+          asyncio.run(main())
+          PY
+
+      - name: Show sample output
+        run: |
+          head -n 40 data/ladbrokes_odds.csv || true
+
+      - name: Commit results
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/ladbrokes_odds.json data/ladbrokes_odds.csv
+          git commit -m "Update Ladbrokes greyhound odds" || echo "Nothing to commit"
+          git push
