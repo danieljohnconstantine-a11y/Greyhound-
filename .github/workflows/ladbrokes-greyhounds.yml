@@ -1,19 +1,25 @@
-name: Ladbrokes Greyhound Odds
+name: Greyhounds — Auto Discover & Scrape (Ladbrokes)
 
 on:
-  workflow_dispatch: {}     # run manually
   schedule:
-    - cron: "0 3 * * *"     # run daily 03:00 UTC (noon AEST)
+    - cron: "30 01 * * *"  # runs 01:30 UTC daily (~11:30 AEST). Adjust if you like.
+  workflow_dispatch: {}      # allows manual run from Actions tab
 
 permissions:
   contents: write
 
+concurrency:
+  group: greyhounds-scrape
+  cancel-in-progress: false
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
-
+    env:
+      # If Ladbrokes blocks default UA, we'll spoof one in the script.
+      TIMEOUT_SECS: "30"
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -30,69 +36,30 @@ jobs:
       - name: Ensure data folder
         run: mkdir -p data
 
-      - name: Scrape Ladbrokes Greyhound meetings
-        env:
-          LAD_MEETINGS: ${{ vars.LAD_MEETINGS }}
+      - name: Auto-discover meetings and scrape odds
         run: |
-          python - <<'PY'
-          import os, json, re
-          from pathlib import Path
-          import pandas as pd
-          import asyncio
-          from playwright.async_api import async_playwright
+          python -m src.ladbrokes_auto --out-dir data
 
-          meetings = [m.strip() for m in os.environ.get("LAD_MEETINGS","").split(",") if m.strip()]
-          if not meetings:
-              print("::error:: No LAD_MEETINGS provided.")
-              exit(1)
-
-          async def scrape_meeting(page, url):
-              await page.goto(url, wait_until="networkidle")
-              await page.wait_for_timeout(2000)
-              html = await page.content()
-              runners = []
-              # crude extraction: any "$" price-looking text with a name before it
-              for line in html.splitlines():
-                  line = line.strip()
-                  if "$" in line and len(line.split()) > 1:
-                      m = re.search(r"\$[0-9]+(\.[0-9]+)?", line)
-                      if m:
-                          price = m.group().replace("$","")
-                          name = line.replace(m.group(),"").strip()
-                          if name:
-                              runners.append({"runner": name, "price": price})
-              return {"url": url, "runners": runners}
-
-          async def main():
-              out = {"meetings":[]}
-              async with async_playwright() as p:
-                  browser = await p.chromium.launch(headless=True)
-                  page = await browser.new_page()
-                  for url in meetings:
-                      try:
-                          m = await scrape_meeting(page, url)
-                          out["meetings"].append(m)
-                      except Exception as e:
-                          out["meetings"].append({"url": url, "error": str(e)})
-                  await browser.close()
-              Path("data/ladbrokes_odds.json").write_text(json.dumps(out, indent=2))
-              rows = []
-              for m in out["meetings"]:
-                  for r in m.get("runners", []):
-                      rows.append({"meeting": m["url"], "runner": r["runner"], "price": r["price"]})
-              pd.DataFrame(rows).to_csv("data/ladbrokes_odds.csv", index=False)
-
-          asyncio.run(main())
-          PY
-
-      - name: Show sample output
+      - name: Show first lines
         run: |
-          head -n 40 data/ladbrokes_odds.csv || true
+          echo "JSON preview:"
+          head -n 40 data/greyhound_odds.json || true
+          echo
+          echo "CSV preview:"
+          head -n 40 data/greyhound_odds.csv || true
 
-      - name: Commit results
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: greyhound-odds
+          path: |
+            data/greyhound_odds.json
+            data/greyhound_odds.csv
+
+      - name: Commit results to repo
         run: |
           git config --local user.name "github-actions[bot]"
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/ladbrokes_odds.json data/ladbrokes_odds.csv
-          git commit -m "Update Ladbrokes greyhound odds" || echo "Nothing to commit"
-          git push
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/greyhound_odds.json data/greyhound_odds.csv
+          git commit -m "Daily greyhound odds (auto)" || echo "No changes"
+          git push || true
