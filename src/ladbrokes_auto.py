@@ -1,38 +1,43 @@
-# src/ladbrokes_auto.py
-"""
-Fetch Ladbrokes greyhound races and save to:
-  data/ladbrokes_greyhounds_YYYY-MM-DD.json
+import os
+import json
+import requests
+from datetime import datetime
+from bs4 import BeautifulSoup
 
-Notes:
-- Uses a public Ladbrokes endpoint commonly used for "next to go" greyhound racing.
-- If it fails (e.g., endpoint changes), we still write a small JSON error stub
-  so the workflow stays traceable and artifacts/commits still happen.
-"""
+def scrape_ladbrokes_greyhounds():
+    """
+    Scrapes Ladbrokes greyhound racing meetings.
+    """
+    url = "https://www.ladbrokes.com.au/racing/greyhound-racing"
+    resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
+    resp.raise_for_status()
 
-from pathlib import Path
-import datetime, json, requests
+    soup = BeautifulSoup(resp.text, "lxml")
+    meetings = []
 
-DATA_DIR = Path("data")
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+    # Look for greyhound meeting links
+    for meeting in soup.select("a[href*='/racing/greyhound-racing/']"):
+        name = meeting.get_text(strip=True)
+        link = meeting.get("href")
+        if name and link:
+            if not link.startswith("http"):
+                link = "https://www.ladbrokes.com.au" + link
+            meetings.append({"name": name, "url": link})
 
-today_str = datetime.date.today().strftime("%Y-%m-%d")
-outfile = DATA_DIR / f"ladbrokes_greyhounds_{today_str}.json"
-
-URL = "https://api.ladbrokes.com.au/sportsbook-api/racing/next-to-go/GREYHOUND"
-HEADERS = {"User-Agent": "Mozilla/5.0"}
-
-def main():
-    try:
-        print(f"[INFO] GET {URL}")
-        r = requests.get(URL, headers=HEADERS, timeout=20)
-        r.raise_for_status()
-        data = r.json()
-        outfile.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        print(f"[OK] wrote {outfile}")
-    except Exception as e:
-        stub = {"error": str(e), "source": URL, "date": today_str}
-        outfile.write_text(json.dumps(stub, indent=2), encoding="utf-8")
-        print(f"[WARN] wrote error stub to {outfile}: {e}")
+    return meetings
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--out-dir", default="data/ladbrokes", help="Output folder")
+    args = parser.parse_args()
+
+    os.makedirs(args.out_dir, exist_ok=True)
+
+    meetings = scrape_ladbrokes_greyhounds()
+
+    out_file = os.path.join(args.out_dir, f"ladbrokes_meetings_{datetime.utcnow().date()}.json")
+    with open(out_file, "w", encoding="utf-8") as f:
+        json.dump(meetings, f, indent=2)
+
+    print(f"✅ Saved {len(meetings)} meetings to {out_file}")
