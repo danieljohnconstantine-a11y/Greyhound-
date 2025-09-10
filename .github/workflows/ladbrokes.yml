@@ -1,21 +1,18 @@
-name: Greyhounds — Ladbrokes Daily Scrape
+name: Greyhounds — Auto Discover & Scrape (Ladbrokes)
 
 on:
-  workflow_dispatch: {}
+  # Manual run button in Actions tab
+  workflow_dispatch:
+  # Optional daily schedule (04:10 UTC); adjust or remove if you like
   schedule:
-    - cron: "15 4 * * *"   # 04:15 UTC daily (~AEST afternoon)
+    - cron: "10 4 * * *"
 
 permissions:
-  contents: write
-
-concurrency:
-  group: ladbrokes-scrape
-  cancel-in-progress: false
+  contents: write   # allow committing scraped files back to the repo
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
 
     steps:
       - name: Checkout repo
@@ -29,25 +26,40 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          # Safety net in case these aren't in requirements.txt yet
+          pip install requests beautifulsoup4 lxml pandas
 
-      - name: Run Ladbrokes scraper
+      - name: Ensure data folder
+        run: mkdir -p data/ladbrokes
+
+      # 🔧 The key fix: run the file directly, not as a module
+      - name: Auto-discover meetings and scrape odds
+        run: python src/ladbrokes_auto.py --out-dir data/ladbrokes
+
+      - name: Show first lines (debug)
+        if: always()
         run: |
-          mkdir -p data
-          python src/ladbrokes_auto.py
+          ls -lah data/ladbrokes || true
+          for f in $(ls data/ladbrokes/*.json 2>/dev/null | head -n 3); do
+            echo "---- $f ----"
+            head -n 20 "$f"
+          done || true
 
-      - name: Upload artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ladbrokes-greyhounds
-          path: data/ladbrokes_greyhounds_*.json
-          if-no-files-found: error
-          retention-days: 7
+          name: ladbrokes-json
+          path: |
+            data/ladbrokes/**/*.json
+            data/ladbrokes/**/*.csv
+          if-no-files-found: warn
 
-      - name: Commit results
+      - name: Commit results to repo
+        # Don’t break the run if there’s nothing new
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name  "github-actions[bot]"
-          git add data/ladbrokes_greyhounds_*.json || true
-          git commit -m "Daily Ladbrokes greyhound scrape" || echo "No changes"
-          git push || true
+          git config --local user.name "github-actions[bot]"
+          git add data/ladbrokes || true
+          git commit -m "Add Ladbrokes scrape $(date -u +'%Y-%m-%dT%H:%M:%SZ')" || echo "Nothing to commit"
+          git push || echo "No changes to push"
