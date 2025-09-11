@@ -1,14 +1,18 @@
 name: Greyhounds — Auto Discover & Scrape (Ladbrokes)
 
 on:
-  # Manual run button in Actions tab
+  # Manual button in the Actions tab
   workflow_dispatch:
-  # Optional daily schedule (04:10 UTC); adjust or remove if you like
+  # Optional schedule (04:10 UTC); keep or remove as you like
   schedule:
     - cron: "10 4 * * *"
 
 permissions:
-  contents: write   # allow committing scraped files back to the repo
+  contents: write  # allow committing scraped files back to the repo
+
+concurrency:
+  group: ladbrokes-scrape
+  cancel-in-progress: true
 
 jobs:
   scrape:
@@ -27,13 +31,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          # Safety net in case these aren't in requirements.txt yet
+          # Safety net (ensures these libs exist even if not in requirements.txt)
           pip install requests beautifulsoup4 lxml pandas
 
-      - name: Ensure data folder
+      - name: Ensure output folder exists
         run: mkdir -p data/ladbrokes
 
-      # 🔧 The key fix: run the file directly, not as a module
       - name: Auto-discover meetings and scrape odds
         run: python src/ladbrokes_auto.py --out-dir data/ladbrokes
 
@@ -43,7 +46,7 @@ jobs:
           ls -lah data/ladbrokes || true
           for f in $(ls data/ladbrokes/*.json 2>/dev/null | head -n 3); do
             echo "---- $f ----"
-            head -n 20 "$f"
+            head -n 30 "$f"
           done || true
 
       - name: Upload artifacts
@@ -56,7 +59,6 @@ jobs:
           if-no-files-found: warn
 
       - name: Commit results to repo
-        # Don’t break the run if there’s nothing new
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
