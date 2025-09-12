@@ -1,9 +1,9 @@
 name: Greyhounds — Auto Discover & Scrape (Ladbrokes)
 
 on:
-  # Manual run button in Actions tab
+  # Manual run from Actions tab
   workflow_dispatch:
-  # Optional daily schedule (04:10 UTC) — adjust or remove if you like
+  # Optional daily run (04:10 UTC)
   schedule:
     - cron: "10 4 * * *"
 
@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -26,11 +28,8 @@ jobs:
       - name: Install Python deps (incl. Playwright)
         run: |
           python -m pip install --upgrade pip
-          # Your requirements (ignore if missing)
           pip install -r requirements.txt || true
-          # Browser automation + handy libs
           pip install playwright beautifulsoup4 lxml pandas requests
-          # Install Chromium and its system deps for the runner
           python -m playwright install --with-deps chromium
 
       - name: Ensure output folder
@@ -38,22 +37,22 @@ jobs:
 
       - name: Auto-discover meetings and scrape odds (Playwright)
         env:
-          # Optional but recommended — set in Settings → Secrets → Actions
+          # Optional: add in Settings → Secrets → Actions
           LADBROKES_COOKIE: ${{ secrets.LADBROKES_COOKIE }}
         run: |
           set -euo pipefail
           python src/ladbrokes_play.py --out-dir data/ladbrokes
 
-      - name: Show output (list files & preview)
+      - name: Show output (tree + previews)
         if: always()
         run: |
           echo "::group::Tree"
           ls -lahR data/ladbrokes || true
           echo "::endgroup::"
           echo "::group::Preview JSON"
-          for f in $(ls data/ladbrokes/meetings_*.json 2>/dev/null | tail -n 3); do
+          for f in $(ls data/ladbrokes/meetings_*.json 2>/dev/null | tail -n 2); do
             echo "---- $f ----"
-            head -n 80 "$f"
+            head -n 60 "$f"
           done || true
           echo "::endgroup::"
 
@@ -64,13 +63,19 @@ jobs:
           path: |
             data/ladbrokes/**/*.json
             data/ladbrokes/**/*.html
+            data/ladbrokes/**/*.png
           if-no-files-found: warn
           retention-days: 7
 
       - name: Commit results to repo
+        if: always()
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add data/ladbrokes || true
-          git commit -m "Ladbrokes scrape $(date -u +'%Y-%m-%dT%H:%M:%SZ')" || echo "Nothing to commit"
-          git push || echo "No changes to push"
+          git config --local user.name  "github-actions[bot]"
+          git add -A -f data/ladbrokes
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+          else
+            git commit -m "Ladbrokes scrape $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            git push || echo "No changes to push"
+          fi
