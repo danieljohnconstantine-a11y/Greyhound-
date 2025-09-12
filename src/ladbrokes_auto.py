@@ -1,101 +1,191 @@
-# src/ladbrokes_auto.py
+"""
+Auto-discover Ladbrokes greyhound meetings and save:
+- data/ladbrokes/ladbrokes_meetings_<UTC>.json  (parsed links & names)
+- data/ladbrokes/debug_<UTC>.html               (raw page for inspection)
+
+This script **never exits non-zero**; even on 403 it writes an empty JSON
+and a debug HTML so the workflow can commit artifacts for diagnosis.
+"""
+
 from __future__ import annotations
-import os, sys, json, time, random, argparse, datetime as dt
-from typing import Tuple, List, Dict
+
+import argparse
+import json
+import os
+import sys
+import time
+from datetime import datetime, timezone
+from typing import List, Dict
+
 import requests
 from bs4 import BeautifulSoup
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
 
-BASE = "https://www.ladbrokes.com.au"
-LIST_URL = f"{BASE}/racing/greyhound-racing"
 
-# desktop-ish headers + keepalive; helps reduce easy 403s
-HEADERS = {
-    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                   "AppleWebKit/537.36 (KHTML, like Gecko) "
-                   "Chrome/124.0 Safari/537.36"),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
+GREYHOUNDS_URLS = [
+    # Try desktop first, then a couple of known alternates
+    "https://www.ladbrokes.com.au/racing/greyhound-racing",
+    "https://www.ladbrokes.com.au/racing/greyhounds",
+    "https://www.ladbrokes.com.au/",
+]
+
+# A realistic browser header set
+BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/126.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-AU,en;q=0.9",
     "Connection": "keep-alive",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "DNT": "1",
     "Upgrade-Insecure-Requests": "1",
 }
 
-def fetch_with_retries(url: str, tries: int = 4, backoff: float = 0.8) -> Tuple[int, str]:
-    s = requests.Session()
-    s.headers.update(HEADERS)
-    status = -1
-    text = ""
-    for attempt in range(1, tries + 1):
-        try:
-            r = s.get(url, timeout=25)
-            status, text = r.status_code, (r.text or "")
-            if status == 200 and text.strip():
-                return status, text
-            # 403/5xx: brief backoff + retry
-        except Exception as e:
-            status, text = -1, f"__EXC__:{e!r}"
-        time.sleep(backoff * attempt + random.uniform(0, 0.4))
-    return status, text
 
-def parse_meetings(html: str) -> List[Dict[str,str]]:
+def _session() -> requests.Session:
+    s = requests.Session()
+    # Robust retry policy, including 403/429 which we sometimes see from WAF/CDN
+    retry = Retry(
+        total=5,
+        connect=5,
+        read=5,
+        backoff_factor=0.8,
+        status_forcelist=(403, 408, 425, 429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET", "HEAD"]),
+        raise_on_status=False,
+    )
+    s.mount("https://", HTTPAdapter(max_retries=retry))
+    s.headers.update(BROWSER_HEADERS)
+    return s
+
+
+def _utc_stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def fetch_any(session: requests.Session, urls: List[str]) -> requests.Response:
+    """
+    Try a small sequence of URLs; do a warmup hit to the site root to set cookies;
+    add a cache-busting `_` query to look less bot-like.
+    """
+    # Warmup/home to set cookies
+    try:
+        session.get("https://www.ladbrokes.com.au/", timeout=15)
+    except Exception:
+        pass
+
+    last_resp = None
+    for base in urls:
+        try:
+            sep = "&" if "?" in base else "?"
+            url = f"{base}{sep}_={int(time.time()*1000)}"
+            last_resp = session.get(url, timeout=20)
+            # 200-299 → good; 403/429 etc will be retried by urllib3 policy already
+            if 200 <= last_resp.status_code < 300 and last_resp.text:
+                return last_resp
+        except Exception:
+            continue
+    # Return the last response (possibly 403) so we can dump HTML for debugging
+    return last_resp
+
+
+def parse_meetings(html: str) -> List[Dict]:
+    """
+    Very liberal parser: find anchors that look like greyhound meeting links.
+    We keep it heuristic so minor markup changes don't break us.
+    """
     soup = BeautifulSoup(html, "lxml")
-    results: List[Dict[str, str]] = []
+    meetings: List[Dict] = []
     seen = set()
 
-    # generic “greyhound” links
-    for a in soup.select('a[href*="/racing/greyhound"]'):
-        name = (a.get_text(strip=True) or "").strip()
-        href = a.get("href") or ""
-        if not href:
-            continue
-        if not href.startswith("http"):
-            href = BASE + href
-        key = (name.lower(), href.lower())
-        # exclude category root pages
-        if "greyhound-racing" in href and key not in seen and name:
+    # Common patterns we might see
+    selectors = [
+        'a[href*="/racing/greyhound"]',
+        'a[href*="/greyhound-racing"]',
+        'a[href*="/greyhound/"]',
+    ]
+
+    for sel in selectors:
+        for a in soup.select(sel):
+            href = a.get("href") or ""
+            name = a.get_text(strip=True) or ""
+            if not href:
+                continue
+            # Normalise href → absolute
+            if href.startswith("/"):
+                href = "https://www.ladbrokes.com.au" + href
+            key = (href, name)
+            if key in seen:
+                continue
+            # Basic quality filters
+            if "results" in href.lower() or "replays" in href.lower():
+                continue
+            if not name or len(name) < 3:
+                continue
             seen.add(key)
-            results.append({"name": name, "href": href})
+            meetings.append({"name": name, "url": href})
 
-    return results
+    return meetings
 
-def ensure_dir(d: str) -> None:
-    os.makedirs(d, exist_ok=True)
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--out-dir", default="data/ladbrokes")
-    args = ap.parse_args()
-    ensure_dir(args.out_dir)
+def main(out_dir: str) -> int:
+    os.makedirs(out_dir, exist_ok=True)
+    stamp = _utc_stamp()
+    out_json = os.path.join(out_dir, f"ladbrokes_meetings_{stamp}.json")
+    out_debug = os.path.join(out_dir, f"debug_{stamp}.html")
 
-    status, html = fetch_with_retries(LIST_URL)
+    sess = _session()
+    resp = fetch_any(sess, GREYHOUNDS_URLS)
 
-    payload = {
-        "source": LIST_URL,
-        "fetched_at": dt.datetime.utcnow().isoformat() + "Z",
-        "status": status,
-        "meetings": [],
-    }
+    status = resp.status_code if resp is not None else -1
+    text = resp.text if (resp is not None and resp.text) else ""
 
-    if status == 200 and html and not html.startswith("__EXC__"):
-        payload["meetings"] = parse_meetings(html)
-    else:
-        payload["debug_html"] = html[:200000]
+    # Always save the debug HTML we got (even if 403/empty)
+    try:
+        with open(out_debug, "w", encoding="utf-8") as f:
+            f.write(text or f"<!-- Empty body; status={status} -->")
+    except Exception as e:
+        print(f"warn: could not write debug HTML: {e}", file=sys.stderr)
 
-    stamp = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-    json_path = os.path.join(args.out_dir, f"ladbrokes_meetings_{stamp}.json")
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
+    meetings: List[Dict] = []
+    if 200 <= status < 300 and text:
+        try:
+            meetings = parse_meetings(text)
+        except Exception as e:
+            print(f"warn: parse failed: {e}", file=sys.stderr)
 
-    print(f"status={status} meetings={len(payload['meetings'])}")
-    print(f"wrote: {json_path}")
+    # Save JSON (maybe empty list; that’s OK)
+    try:
+        with open(out_json, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "fetched_at_utc": stamp,
+                    "status_code": status,
+                    "count": len(meetings),
+                    "meetings": meetings,
+                },
+                f,
+                indent=2,
+                ensure_ascii=False,
+            )
+    except Exception as e:
+        print(f"warn: could not write meetings JSON: {e}", file=sys.stderr)
 
-    if status != 200 or not payload["meetings"]:
-        # also dump HTML to inspect exactly what the runner saw
-        dbg_path = os.path.join(args.out_dir, f"debug_{stamp}.html")
-        with open(dbg_path, "w", encoding="utf-8", errors="ignore") as f:
-            f.write(payload.get("debug_html", html or "(no html)"))
-        print(f"saved debug: {dbg_path}")
-        sys.exit(2)  # fail so we notice it
+    print(f"status={status} meetings={len(meetings)}")
+    print(f"wrote: {out_json}")
+    print(f"saved debug: {out_debug}")
+
+    # Always exit 0 so the workflow continues to commit/upload artifacts
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    p = argparse.ArgumentParser()
+    p.add_argument("--out-dir", default="data/ladbrokes")
+    args = p.parse_args()
+    sys.exit(main(args.out_dir))
