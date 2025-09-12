@@ -1,1 +1,77 @@
+name: Greyhounds — Daily Form (R&S + TheDogs)
 
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "10 4 * * *"  # 04:10 UTC (~2:10pm Brisbane)
+
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Python + Playwright deps
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt || true
+          # playwright not strictly required for these two scrapers, but handy later
+          pip install playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Ensure output folders
+        run: |
+          mkdir -p data/rns
+          mkdir -p data/thedogs
+
+      - name: Racing & Sports — full form
+        run: python src/rns_daily.py --out-dir data/rns
+
+      - name: The Dogs — fields/odds
+        run: python src/thedogs_daily.py --out-dir data/thedogs
+
+      - name: Show previews
+        if: always()
+        run: |
+          echo "::group::RNS"
+          ls -lah data/rns || true
+          for f in $(ls -1t data/rns/full_day_*.csv 2>/dev/null | head -n 1); do
+            echo "---- $f ----"; head -n 40 "$f"; done || true
+          echo "::endgroup::"
+          echo "::group::TheDogs"
+          ls -lah data/thedogs || true
+          for f in $(ls -1t data/thedogs/full_day_*.csv 2>/dev/null | head -n 1); do
+            echo "---- $f ----"; head -n 40 "$f"; done || true
+          echo "::endgroup::"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-form
+          path: |
+            data/rns/**
+            data/thedogs/**
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Commit results
+        if: always()
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name  "github-actions[bot]"
+          git add -A data/rns data/thedogs || true
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+          else
+            git commit -m "Daily form (R&S + TheDogs) $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            git push || echo "No changes to push"
+          fi
