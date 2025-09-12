@@ -1,167 +1,101 @@
 # src/ladbrokes_auto.py
 from __future__ import annotations
-
-import argparse
-import datetime as dt
-import json
-import os
-import re
-import time
-from typing import List, Dict
-
+import os, sys, json, time, random, argparse, datetime as dt
+from typing import Tuple, List, Dict
 import requests
 from bs4 import BeautifulSoup
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
+BASE = "https://www.ladbrokes.com.au"
+LIST_URL = f"{BASE}/racing/greyhound-racing"
 
-LADBROKES_URL = "https://www.ladbrokes.com.au/racing/greyhound-racing"
-
-# A very complete header set to look like a real Chrome on Windows.
-BROWSER_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/123.0.0.0 Safari/537.36"
-    ),
-    "Accept": (
-        "text/html,application/xhtml+xml,application/xml;q=0.9,"
-        "image/avif,image/webp,image/apng,*/*;q=0.8"
-    ),
+# desktop-ish headers + keepalive; helps reduce easy 403s
+HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/124.0 Safari/537.36"),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.ladbrokes.com.au/",
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
-    # These sec-* headers are commonly sent by Chrome; help some WAFs
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "same-origin",
-    "Sec-Fetch-User": "?1",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
     "Upgrade-Insecure-Requests": "1",
 }
 
-
-def session_with_retries() -> requests.Session:
-    """Return a requests Session with robust retries for 403/429/5xx."""
+def fetch_with_retries(url: str, tries: int = 4, backoff: float = 0.8) -> Tuple[int, str]:
     s = requests.Session()
-    s.headers.update(BROWSER_HEADERS)
+    s.headers.update(HEADERS)
+    status = -1
+    text = ""
+    for attempt in range(1, tries + 1):
+        try:
+            r = s.get(url, timeout=25)
+            status, text = r.status_code, (r.text or "")
+            if status == 200 and text.strip():
+                return status, text
+            # 403/5xx: brief backoff + retry
+        except Exception as e:
+            status, text = -1, f"__EXC__:{e!r}"
+        time.sleep(backoff * attempt + random.uniform(0, 0.4))
+    return status, text
 
-    retry = Retry(
-        total=5,
-        connect=5,
-        read=5,
-        backoff_factor=1.2,
-        status_forcelist=[403, 408, 409, 425, 429, 500, 502, 503, 504],
-        allowed_methods=["GET", "HEAD", "OPTIONS"],
-        raise_on_status=False,
-        respect_retry_after_header=True,
-    )
-    adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=20)
-    s.mount("https://", adapter)
-    s.mount("http://", adapter)
-    return s
+def parse_meetings(html: str) -> List[Dict[str,str]]:
+    soup = BeautifulSoup(html, "lxml")
+    results: List[Dict[str, str]] = []
+    seen = set()
 
-
-def scrape_ladbrokes_meetings() -> List[Dict]:
-    """
-    Download the greyhound racing page and extract meeting links/names.
-
-    Returns:
-        A list of {name, url} dictionaries (may be empty if blocked).
-    """
-    s = session_with_retries()
-
-    # Small jitter can help with anti-bot (no harm if not needed)
-    time.sleep(0.7)
-
-    resp = s.get(LADBROKES_URL, timeout=20)
-    # Don't raise immediately: 403/429 may succeed on retry with backoff
-    if resp.status_code == 403:
-        # One extra deliberate wait then a final attempt
-        time.sleep(2.0)
-        resp = s.get(LADBROKES_URL, timeout=20)
-
-    # If still not OK, return with as much debug as is safe
-    if resp.status_code >= 400:
-        print(
-            f"[warn] Got HTTP {resp.status_code} from Ladbrokes. "
-            f"Anti-bot may be blocking datacenter IPs."
-        )
-        return []
-
-    soup = BeautifulSoup(resp.text, "lxml")
-
-    meetings: List[Dict] = []
-
-    # Heuristics: find anchors that look like meeting links.
-    # Adjust patterns as we learn the DOM (kept conservative and safe).
-    link_candidates = soup.select("a[href]")
-
-    pattern = re.compile(r"/racing/greyhound-racing/[^\"']+", re.IGNORECASE)
-
-    for a in link_candidates:
-        href = a.get("href", "")
+    # generic “greyhound” links
+    for a in soup.select('a[href*="/racing/greyhound"]'):
+        name = (a.get_text(strip=True) or "").strip()
+        href = a.get("href") or ""
         if not href:
             continue
-        if not pattern.search(href):
-            continue
+        if not href.startswith("http"):
+            href = BASE + href
+        key = (name.lower(), href.lower())
+        # exclude category root pages
+        if "greyhound-racing" in href and key not in seen and name:
+            seen.add(key)
+            results.append({"name": name, "href": href})
 
-        # Normalize URL
-        url = href
-        if url.startswith("/"):
-            url = f"https://www.ladbrokes.com.au{url}"
+    return results
 
-        # Visible text as name
-        name = a.get_text(strip=True) or "Unknown"
-
-        # Filter obvious non-meeting junk (very soft filter)
-        if len(name) < 3:
-            continue
-
-        meetings.append({"name": name, "url": url})
-
-    # De-duplicate by URL while preserving order
-    seen = set()
-    uniq: List[Dict] = []
-    for m in meetings:
-        if m["url"] in seen:
-            continue
-        seen.add(m["url"])
-        uniq.append(m)
-
-    print(f"[info] Extracted {len(uniq)} candidate meeting links.")
-    return uniq
-
+def ensure_dir(d: str) -> None:
+    os.makedirs(d, exist_ok=True)
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Scrape Ladbrokes greyhound meetings.")
-    parser.add_argument(
-        "--out-dir",
-        default="data/ladbrokes",
-        help="Directory to write JSON outputs into (default: data/ladbrokes)",
-    )
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out-dir", default="data/ladbrokes")
+    args = ap.parse_args()
+    ensure_dir(args.out_dir)
 
-    os.makedirs(args.out_dir, exist_ok=True)
-
-    meetings = scrape_ladbrokes_meetings()
-
-    today = dt.datetime.utcnow().strftime("%Y-%m-%d")
-    out_file = os.path.join(args.out_dir, f"meetings_{today}.json")
+    status, html = fetch_with_retries(LIST_URL)
 
     payload = {
-        "source": "ladbrokes",
-        "scraped_at_utc": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
-        "page": LADBROKES_URL,
-        "count": len(meetings),
-        "meetings": meetings,
+        "source": LIST_URL,
+        "fetched_at": dt.datetime.utcnow().isoformat() + "Z",
+        "status": status,
+        "meetings": [],
     }
 
-    with open(out_file, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
+    if status == 200 and html and not html.startswith("__EXC__"):
+        payload["meetings"] = parse_meetings(html)
+    else:
+        payload["debug_html"] = html[:200000]
 
-    print(f"[ok] Saved {len(meetings)} meetings to {out_file}")
+    stamp = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    json_path = os.path.join(args.out_dir, f"ladbrokes_meetings_{stamp}.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
 
+    print(f"status={status} meetings={len(payload['meetings'])}")
+    print(f"wrote: {json_path}")
+
+    if status != 200 or not payload["meetings"]:
+        # also dump HTML to inspect exactly what the runner saw
+        dbg_path = os.path.join(args.out_dir, f"debug_{stamp}.html")
+        with open(dbg_path, "w", encoding="utf-8", errors="ignore") as f:
+            f.write(payload.get("debug_html", html or "(no html)"))
+        print(f"saved debug: {dbg_path}")
+        sys.exit(2)  # fail so we notice it
 
 if __name__ == "__main__":
     main()
