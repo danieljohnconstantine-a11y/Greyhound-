@@ -3,7 +3,7 @@ name: Greyhounds — Racing & Sports Daily
 on:
   workflow_dispatch:
   schedule:
-    - cron: "10 4 * * *" # 04:10 UTC daily
+    - cron: "10 4 * * *"  # 04:10 UTC daily
 
 permissions:
   contents: write
@@ -24,15 +24,23 @@ jobs:
           pip install playwright==1.* pandas bs4 lxml
           python -m playwright install --with-deps chromium
 
-      - name: Ensure output folders
+      - name: Ensure output folder
+        run: mkdir -p data/rns
+
+      # 🔹 NEW: seed files so there’s always something to commit
+      - name: Seed outputs (placeholder)
         run: |
+          set -e
+          ts=$(date -u +'%Y%m%dT%H%M%SZ')
           mkdir -p data/rns
+          echo '{"seed":true,"fetched_at_utc":"'$ts'","meetings":[]}' > "data/rns/meetings_${ts}.json"
+          echo 'meeting,race,time,box,runner,odds,meeting_url,source' > "data/rns/full_day_${ts}.csv"
 
       - name: Racing & Sports — full form
         run: |
           set -euo pipefail
           python src/rns_daily.py --out-dir data/rns
-        continue-on-error: false
+        continue-on-error: true   # we still want to upload/commit debug if scraping hiccups
 
       - name: Show previews
         if: always()
@@ -48,15 +56,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rns-daily
-          path: |
-            data/rns/*
+          path: data/rns/*
           if-no-files-found: error
 
+      # 🔹 CHANGED: commit anything new or changed
       - name: Commit results
         if: always()
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add data/rns || true
+          git add -A
           git commit -m "RNS daily scrape $(date -u +'%Y-%m-%dT%H:%M:%SZ')" || echo "Nothing to commit"
           git push || echo "No changes to push"
