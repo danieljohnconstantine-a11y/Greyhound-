@@ -1,53 +1,52 @@
-import os
-import json
+import re, pathlib
+from bs4 import BeautifulSoup
 from datetime import datetime
-from playwright.sync_api import sync_playwright
+from .http_client import fetch
+from .utils import utcstamp, write_json, write_text, OUT_BASE
 
-URL = "https://thedogs.com.au/racing"
+OUT_DIR = OUT_BASE / "thedogs"
 
-def fetch_page(url: str) -> str:
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--disable-blink-features=AutomationControlled"]
-        )
-        page = browser.new_page(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                       "AppleWebKit/537.36 (KHTML, like Gecko) "
-                       "Chrome/126.0.0.0 Safari/537.36"
-        )
-        page.goto(url, timeout=60000)
-        html = page.content()
-        browser.close()
-        return html
+def _today_slug():
+    # TheDogs uses yyyy-mm-dd in many routes
+    return datetime.utcnow().strftime("%Y-%m-%d")
 
-def main(out_dir: str):
-    os.makedirs(out_dir, exist_ok=True)
-    fetched_at = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+def parse_meetings_index(html: str):
+    # Heuristic: find links that look like /racing/<track>/<date>/...
+    soup = BeautifulSoup(html, "lxml")
+    links = []
+    for a in soup.select("a[href]"):
+        href = a["href"]
+        if re.search(r"/racing/.+/\d{4}-\d{2}-\d{2}/", href):
+            links.append(href)
+    # de-dupe per track
+    uniq = sorted(set(links))
+    return [{"url": u} for u in uniq]
 
+def main():
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    ts = utcstamp()
+
+    idx_url = f"https://www.thedogs.com.au/racing?date={_today_slug()}"
+    status = 0
+    meetings = []
+    debug_html = ""
     try:
-        html = fetch_page(URL)
-        debug_file = os.path.join(out_dir, f"debug_{fetched_at}.html")
-        with open(debug_file, "w", encoding="utf-8") as f:
-            f.write(html)
-
-        json_file = os.path.join(out_dir, f"meetings_{fetched_at}.json")
-        data = {
-            "fetched_at_utc": fetched_at,
-            "url": URL,
-            "meetings": []
-        }
-        with open(json_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-
-        print(f"[thedogs] saved debug={debug_file}, json={json_file}")
-
+        r = fetch(idx_url)
+        status = r.status_code
+        debug_html = r.text
+        meetings = parse_meetings_index(debug_html)
     except Exception as e:
-        print(f"[thedogs] error: {e}")
+        status = 0
+        debug_html = f"ERROR: {e}\n"
+
+    write_text(OUT_DIR / f"debug_{ts}.html", debug_html)
+    write_json(OUT_DIR / f"meetings_{ts}.json", {
+        "fetched_at_utc": ts,
+        "source": "thedogs",
+        "status_code": status,
+        "count": len(meetings),
+        "meetings": meetings,
+    })
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--out-dir", required=True)
-    args = parser.parse_args()
-    main(args.out_dir)
+    main()
