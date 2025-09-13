@@ -1,133 +1,120 @@
 # src/parse_pdf.py
-# Usage: python src/parse_pdf.py --in forms --out data/combined/forms_<stamp>.csv
-import argparse, csv, re
-from pathlib import Path
-import pdfplumber
+import re
+import os
+import glob
+from datetime import datetime, timezone
+from dataclasses import dataclass, asdict
+from typing import List, Dict, Iterable
+from pdfminer.high_level import extract_text
 
-HEADER = ["meeting","race","time","box","runner","odds","trainer","track","grade","source"]
+# ---- Data model -------------------------------------------------------------
 
-def guess_meeting_from_name(fname: str) -> str:
-    # e.g. DRWN_2025-09-07.pdf -> DRWN
-    m = re.match(r"([A-Z]{3,5})[_-]", Path(fname).name)
-    return (m.group(1) if m else Path(fname).stem).upper()
+@dataclass
+class RunnerRow:
+    track: str
+    date: str       # YYYY-MM-DD
+    race: int
+    box: int
+    runner: str
+    trainer: str | None
 
-def normalize_time(s: str) -> str:
-    s = s.strip()
-    # accept 19:42, 7:42PM, 19.42, etc.
-    s = s.replace(".", ":").upper()
-    s = re.sub(r"\s+", "", s)
-    # convert 7:42PM to 19:42
-    m = re.match(r"^(\d{1,2}):(\d{2})(AM|PM)$", s)
+# ---- Helpers ----------------------------------------------------------------
+
+RACE_HDR = re.compile(r"\bRACE\s*(\d{1,2})\b", re.IGNORECASE)
+# Common runner line variants found in AUS greyhound PDFs:
+#  - "1  FAST DOG (Trainer: John Smith)"
+#  - "1 FAST DOG T: John Smith"
+#  - "Box 1 FAST DOG ... Trainer John Smith"
+RUNNER_LINE = re.compile(
+    r"(?:^|\s)(?:Box\s*)?([1-8])\s+([A-Za-z][A-Za-z0-9' .\-]+?)(?:\s{2,}|\s*\(|\s+T:|\s+Trainer[: ]|$)",
+    re.IGNORECASE,
+)
+TRAINER_FALLBACKS: list[re.Pattern] = [
+    re.compile(r"Trainer[: ]\s*([A-Za-z][A-Za-z .'\-]+)"),
+    re.compile(r"T:\s*([A-Za-z][A-Za-z .'\-]+)"),
+    re.compile(r"\(Trainer:\s*([A-Za-z][A-Za-z .'\-]+)\)"),
+]
+
+TRACK_DATE = re.compile(
+    r"^\s*([A-Z]{3,5})\s*[_\-– ]\s*(20\d{2}[\-/\.]\d{2}[\-/\.]\d{2})\s*$"
+)
+
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip()
+
+def _find_trainer(snippet: str) -> str | None:
+    for pat in TRAINER_FALLBACKS:
+        m = pat.search(snippet)
+        if m:
+            return _norm(m.group(1))
+    return None
+
+# ---- Core -------------------------------------------------------------------
+
+def _infer_track_date_from_filename(path: str) -> tuple[str, str] | None:
+    name = os.path.basename(path).removesuffix(".pdf")
+    m = TRACK_DATE.match(name)
     if m:
-        h, mi, ap = int(m.group(1)), int(m.group(2)), m.group(3)
-        if ap == "PM" and h < 12: h += 12
-        if ap == "AM" and h == 12: h = 0
-        return f"{h:02d}:{mi:02d}"
-    m = re.match(r"^(\d{1,2}):(\d{2})$", s)
-    return f"{int(m.group(1)):02d}:{m.group(2)}" if m else s
+        track = m.group(1).upper()
+        datestr = m.group(2).replace(".", "-").replace("/", "-")
+        return track, datestr
+    # fallback: QSTR_2025-09-08.pdf style (already)
+    parts = name.split("_")
+    if len(parts) >= 2 and re.match(r"20\d{2}-\d{2}-\d{2}", parts[-1]):
+        return parts[0].upper(), parts[-1]
+    return None
 
-def is_runner_row(cells):
-    # heuristic: Box number 1-8 + runner name present
-    if len(cells) < 3: return False
-    box = cells[0].strip()
-    return box.isdigit() and 1 <= int(box) <= 8
+def parse_pdf_file(pdf_path: str) -> List[RunnerRow]:
+    text = extract_text(pdf_path)
+    lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
+    # Track/date from filename (most reliable)
+    td = _infer_track_date_from_filename(pdf_path)
+    track, datestr = (td if td else ("UNK", datetime.now().strftime("%Y-%m-%d")))
+    rows: list[RunnerRow] = []
 
-def read_pdf(path: Path):
-    meeting = guess_meeting_from_name(path.name)
-    track = meeting  # you can map this to full track names if desired
-    source = "rns_pdf"
-    out_rows = []
+    race = None
+    # Join adjacent “paragraphs” to keep local trainer info near the runner line
+    for i, ln in enumerate(lines):
+        ln_norm = _norm(ln)
 
-    with pdfplumber.open(path) as pdf:
-        race_no = None
-        race_time = None
-        grade = ""
+        # Race header
+        m_r = RACE_HDR.search(ln_norm)
+        if m_r:
+            race = int(m_r.group(1))
+            continue
 
-        for page in pdf.pages:
-            text = page.extract_text() or ""
-            # Try to detect race header like "Race 5 – 19:42"
-            for line in text.splitlines():
-                m = re.search(r"Race\s+(\d+)\D+(\d{1,2}[:.]\d{2}(?:\s*[AP]M)?)", line, re.I)
-                if m:
-                    race_no = int(m.group(1))
-                    race_time = normalize_time(m.group(2))
-                g = re.search(r"(Grade\s+[A-Z0-9]+|Maiden|Open|Mixed\s?\d+)", line, re.I)
-                if g: grade = g.group(1).strip()
+        # Detect runner lines (box, runner name)
+        m = RUNNER_LINE.search(ln_norm)
+        if m and race is not None:
+            box = int(m.group(1))
+            runner = _norm(m.group(2))
 
-            # Table extraction pass
-            try:
-                table = page.extract_table()
-                tables = [table] if table else []
-            except Exception:
-                tables = []
+            # Look around this line for trainer
+            context = " ".join(_norm(x) for x in lines[max(0, i-2): i+3])
+            trainer = _find_trainer(context)
 
-            # Fallback: multiple tables
-            try:
-                tables = tables or page.extract_tables() or []
-            except Exception:
-                pass
+            rows.append(RunnerRow(
+                track=track, date=datestr, race=race, box=box,
+                runner=runner, trainer=trainer
+            ))
+    return rows
 
-            for tbl in tables:
-                if not tbl: continue
-                for row in tbl:
-                    if not row: continue
-                    cells = [ (c or "").strip() for c in row ]
-                    if not is_runner_row(cells):
-                        continue
-
-                    box = cells[0].strip()
-                    runner = cells[1].strip()
-                    trainer = ""
-                    odds = ""
-
-                    # try to find trainer / odds in remaining columns
-                    # common layout: [box, runner, trainer, odds, ...]
-                    for c in cells[2:]:
-                        if re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b", c) and not trainer:
-                            trainer = c.strip()
-                        if re.match(r"^\d+(\.\d+)?$", c) and not odds:
-                            odds = c.strip()
-
-                    out_rows.append({
-                        "meeting": meeting,
-                        "race": race_no or "",
-                        "time": race_time or "",
-                        "box": box,
-                        "runner": runner,
-                        "odds": odds,
-                        "trainer": trainer,
-                        "track": track,
-                        "grade": grade,
-                        "source": source
-                    })
-
-    return out_rows
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--in", dest="in_dir", required=True)
-    ap.add_argument("--out", dest="out_csv", required=True)
-    args = ap.parse_args()
-
-    in_dir = Path(args.in_dir)
-    out_csv = Path(args.out_csv)
-    out_csv.parent.mkdir(parents=True, exist_ok=True)
-
-    pdfs = sorted(in_dir.glob("*.pdf"))
-    rows = []
-    for p in pdfs:
+def parse_forms_for_today(forms_dir: str = "forms") -> List[RunnerRow]:
+    # Today’s PDFs (e.g., QSTR_YYYY-MM-DD.pdf)
+    today = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
+    candidates = sorted(glob.glob(os.path.join(forms_dir, f"*_{today}.pdf")))
+    rows: list[RunnerRow] = []
+    for pdf in candidates:
         try:
-            rows.extend(read_pdf(p))
+            rows.extend(parse_pdf_file(pdf))
         except Exception as e:
-            print(f"[WARN] Failed {p.name}: {e}")
+            print(f"[warn] failed {pdf}: {e}")
+    return rows
 
-    with out_csv.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=HEADER)
-        w.writeheader()
-        for r in rows:
-            w.writerow(r)
-
-    print(f"parsed_rows={len(rows)} -> {out_csv}")
+def to_dicts(rows: Iterable[RunnerRow]) -> List[Dict]:
+    return [asdict(r) for r in rows]
 
 if __name__ == "__main__":
-    main()
+    out = parse_forms_for_today()
+    for r in out[:10]:
+        print(r)
