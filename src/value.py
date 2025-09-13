@@ -1,25 +1,42 @@
-from __future__ import annotations
-import pandas as pd
+# src/value.py
+# Usage: python src/value.py --in data/combined/features_*.csv --out reports/latest/bets_*.csv
+import argparse, pandas as pd, numpy as np
+from pathlib import Path
 
-def implied_prob(odds: float) -> float:
-    return 0.0 if float(odds) <= 0 else 1.0 / float(odds)
+def kelly_fraction(p, b, f=0.25):
+    """ Fractional Kelly. p=prob, b=odds-1. f in [0..1]. """
+    edge = (b*p - (1-p))
+    k = edge / b
+    k = np.where((b>0)&(k>0), k, 0.0)
+    return f * k
 
-def kelly_fraction(p: float, o: float, kelly: float = 0.25) -> float:
-    b = float(o) - 1.0
-    if b <= 0:
-        return 0.0
-    edge = (p * (b + 1)) - 1.0
-    f = edge / b
-    return max(0.0, f * kelly)
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--in", dest="in_csv", required=True)
+    ap.add_argument("--out", dest="out_csv", required=True)
+    args = ap.parse_args()
 
-def find_value_bets(prob_df: pd.DataFrame, odds_df: pd.DataFrame, bank: float, kelly: float) -> pd.DataFrame:
-    # odds_df must have: track,date,race,box,runner,odds
-    merged = prob_df.merge(
-        odds_df, on=["track", "date", "race", "box", "runner"], how="inner", suffixes=("", "_odds")
-    )
-    merged["implied"] = merged["odds"].astype(float).apply(implied_prob)
-    merged["edge"] = merged["prob"] - merged["implied"]
-    merged["stake_frac"] = merged.apply(lambda r: kelly_fraction(r["prob"], r["odds"], kelly), axis=1)
-    merged["stake"] = (bank * merged["stake_frac"]).round(2)
-    bets = merged[merged["edge"] > 0].sort_values(["race", "edge"], ascending=[True, False]).reset_index(drop=True)
-    return bets
+    df = pd.read_csv(args.in_csv)
+
+    # Use market odds if present else fair_price as proxy (no bet if missing)
+    has_odds = df["odds"].fillna(0).gt(0)
+    b = np.where(has_odds, df["odds"].values - 1.0, df["fair_price"].values - 1.0)
+    p = df["model_prob"].values
+
+    df["stake_frac"] = kelly_fraction(p, b, f=0.25)
+    df["stake_units"] = (df["stake_frac"] * 10).round(2)  # 10u bank per day (adjust)
+    df["note"] = np.where(df["stake_units"]>0, "Bet", "No bet")
+
+    # Only show selections with positive stake
+    sel = df[df["stake_units"]>0].copy()
+    sel = sel[[
+        "meeting","race","time","box","runner","odds","fair_price","model_prob","edge","stake_units","note"
+    ]].sort_values(["meeting","race","stake_units"], ascending=[True, True, False])
+
+    out = Path(args.out_csv)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    sel.to_csv(out, index=False)
+    print(f"bets={len(sel)} -> {out}")
+
+if __name__ == "__main__":
+    main()
