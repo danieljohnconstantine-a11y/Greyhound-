@@ -1,63 +1,67 @@
 #!/usr/bin/env python3
-import argparse
-from pathlib import Path
+import argparse, json, os, glob, csv
 from datetime import datetime, timezone
-import pandas as pd
-import json
+
+def utcstamp():
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 def newest(pattern: str):
-    files = sorted(Path().glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
-    return files[0] if files else None
+    files = sorted(glob.glob(pattern))
+    return files[-1] if files else None
 
-def load_latest_json(dirpath: str):
-    j = newest(f"{dirpath}/meetings_*.json")
-    if not j:
+def load_meetings(dirpath: str):
+    """Load the newest meetings_*.json from dirpath; return list of dicts."""
+    f = newest(os.path.join(dirpath, "meetings_*.json"))
+    if not f:
         return []
-    data = json.loads(j.read_text(encoding="utf-8"))
-    races = data.get("races", [])
-    rows = []
-    for r in races:
-        for runner in r.get("runners", []):
-            rows.append({
-                "source": data.get("source", "unknown"),
-                "meeting": r.get("meeting"),
-                "meeting_url": r.get("meeting_url"),
-                "race_no": r.get("race_no"),
-                "time_local": r.get("time_local"),
-                "runner_no": runner.get("number"),
-                "runner_name": runner.get("name"),
-                "box": runner.get("box"),
-                "odds": runner.get("odds"),
-                "trainer": runner.get("trainer"),
-            })
-    return rows
+    try:
+        with open(f, "r", encoding="utf-8") as j:
+            data = json.load(j)
+            return data.get("meetings", []) or []
+    except Exception:
+        return []
 
-def main(rns_dir: str, dogs_dir: str, out_dir: str):
-    out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
-    rows = []
-    rows += load_latest_json(rns_dir)
-    rows += load_latest_json(dogs_dir)
-    if not rows:
-        # fallback: combine latest CSVs if exist
-        dfs = []
-        rns_csv = newest(f"{rns_dir}/full_day_*.csv")
-        dogs_csv = newest(f"{dogs_dir}/full_day_*.csv")
-        if rns_csv: dfs.append(pd.read_csv(rns_csv))
-        if dogs_csv: dfs.append(pd.read_csv(dogs_csv))
-        if dfs:
-            df = pd.concat(dfs, ignore_index=True)
-        else:
-            df = pd.DataFrame(columns=["source","meeting","meeting_url","race_no","time_local","runner_no","runner_name","box","odds","trainer"])
-    else:
-        df = pd.DataFrame(rows)
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    df.to_csv(out / f"combined_{ts}.csv", index=False)
-    print(f"[merge] rows={len(df)} -> {out}/combined_{ts}.csv")
+def main(rns_dir: str, dogs_dir: str, out_dir: str) -> int:
+    os.makedirs(out_dir, exist_ok=True)
+    ts = utcstamp()
+
+    rns = load_meetings(rns_dir)
+    dogs = load_meetings(dogs_dir)
+
+    # Combine & de-dupe by URL
+    seen, combined = set(), []
+    for src in (rns, dogs):
+        for m in src:
+            url = (m.get("url") or "").strip()
+            key = url or m.get("name", "")
+            if key and key not in seen:
+                seen.add(key)
+                combined.append(m)
+
+    # Save combined JSON
+    out_json_path = os.path.join(out_dir, f"full_day_{ts}.json")
+    with open(out_json_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "fetched_at_utc": ts,
+            "meetings": combined,
+            "counts": {"rns": len(rns), "thedogs": len(dogs), "combined": len(combined)}
+        }, f, ensure_ascii=False, indent=2)
+
+    # Save CSV (header-only if no rows yet)
+    out_csv_path = os.path.join(out_dir, f"full_day_{ts}.csv")
+    headers = ["meeting", "race", "time", "box", "runner", "odds", "meeting_url"]
+    with open(out_csv_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(headers)
+        # No race rows yet — this is the scaffold file downstream code can append to.
+
+    print(f"combined_meetings={len(combined)}  rns={len(rns)}  thedogs={len(dogs)}")
+    return 0
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--rns-dir", required=True)
-    ap.add_argument("--dogs-dir", required=True)
-    ap.add_argument("--out-dir", default="data/combined")
-    args = ap.parse_args()
-    main(args.rns_dir, args.dogs_dir, args.out_dir)
+    p = argparse.ArgumentParser()
+    p.add_argument("--rns", required=True)
+    p.add_argument("--dogs", required=True)
+    p.add_argument("--out", required=True)
+    args = p.parse_args()
+    raise SystemExit(main(args.rns, args.dogs, args.out))
