@@ -1,204 +1,180 @@
-# rns_daily.py
-# Robust daily scraper for Racing & Sports (AU) greyhound meetings.
-# - Uses Playwright headless Chromium with AU locale/timezone.
-# - Tries both Form Guide and Greyhound home pages.
-# - Waits for dynamic content, extracts meeting links broadly.
-# - Writes JSON + CSV; warns (does not hard-fail) if zero meetings.
+#!/usr/bin/env python3
+"""
+Render + scrape daily Australian greyhound meetings.
 
+Strategy
+--------
+1) Try Racing & Sports (RNS): https://www.racingandsports.com.au/form-guide/greyhound
+   - Headless Chromium with AU timezone/locale.
+   - Collect anchor tags that look like meeting pages.
+2) If zero meetings, try TheDogs: https://www.thedogs.com.au/racing
+3) Save *everything*:
+   - debug_<ts>.html : raw HTML of meetings page we saw
+   - page_<ts>.png   : screenshot
+   - meetings_<ts>.json   : list of meetings with name+url+source
+   - full_day_<ts>.csv    : header CSV (maybe empty rows initially)
+
+This script favors debuggability over perfection: you’ll always get artifacts
+to iterate selectors quickly without guesswork.
+"""
 from __future__ import annotations
-import argparse
-import csv
-import json
-import os
-import re
-import sys
+import argparse, json, os, re, sys, time
 from datetime import datetime, timezone
-from urllib.parse import urljoin, urlparse
+from typing import List, Dict
+import pandas as pd
 
 from playwright.sync_api import sync_playwright
 
-FORM_URLS = [
-    "https://www.racingandsports.com.au/form-guide/greyhound",  # main target
-    "https://www.racingandsports.com.au/greyhound",             # fallback landing
-]
 
-OUT_SUBDIR = "rns"
-PNG_W = 1440
-PNG_H = 900
+UTC_TS = lambda: datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
-# Simple utilities
-def utc_stamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+RNS_URL = "https://www.racingandsports.com.au/form-guide/greyhound"
+DOGS_URL = "https://www.thedogs.com.au/racing"
 
-def ensure_dir(p: str) -> None:
-    os.makedirs(p, exist_ok=True)
+A_LIKE_MEETING = re.compile(
+    r"(greyhound|dogs?).*(meeting|angle|park|track|cup|heats?|final|race\s*1)",
+    re.IGNORECASE,
+)
 
-def looks_like_meeting(text: str, href: str) -> bool:
-    """Broad heuristics for a meeting link."""
-    t = (text or "").strip()
-    h = (href or "").strip().lower()
-    if not t or not h:
-        return False
-    # must be a racing & sports link and reference greyhound section
-    if "racingandsports.com.au" not in h and not h.startswith("/"):
-        return False
-    if "greyhound" not in h:
-        return False
-    # discard obvious non-meeting links
-    bad = ["results", "news", "help", "terms", "privacy", "contact", "bet", "odds"]  # conservative
-    if any(b in h for b in bad):
-        return False
-    # meeting names are usually a few letters, not a whole paragraph
-    if len(t) < 3 or len(t) > 60:
-        return False
-    return True
+def save_text(path: str, text: str):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
 
-def absolutize(base: str, href: str) -> str:
-    try:
-        return urljoin(base, href)
-    except Exception:
-        return href
+def save_json(path: str, obj):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=2, ensure_ascii=False)
 
-def scrape_meetings_with_playwright(out_dir: str) -> dict:
-    ts = utc_stamp()
-    out_dir_abs = os.path.abspath(out_dir)
-    ensure_dir(out_dir_abs)
+def ensure_dir(d: str):
+    os.makedirs(d, exist_ok=True)
 
-    debug_html_path = os.path.join(out_dir_abs, f"debug_{ts}.html")
-    debug_png_path  = os.path.join(out_dir_abs, f"page_{ts}.png")
+def normalize_href(href: str) -> str:
+    if not href:
+        return ""
+    # Strip JS voids and fragments
+    if href.startswith("javascript:"):
+        return ""
+    return href.strip()
 
-    meetings: list[dict] = []
-    seen: set[tuple[str, str]] = set()
-    final_status = 0
-    last_html = ""
+def collect_meetings(page, base_url: str, source: str) -> List[Dict]:
+    """Generic anchor collector with broad heuristics + de-dup."""
+    anchors = page.locator("a")
+    hrefs = set()
+    meetings: List[Dict] = []
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=[
-            "--disable-blink-features=AutomationControlled",
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-        ])
-        context = browser.new_context(
-            locale="en-AU",
-            timezone_id="Australia/Sydney",
-            geolocation={"latitude": -33.8688, "longitude": 151.2093},
-            permissions=["geolocation"],
-            viewport={"width": PNG_W, "height": PNG_H},
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
-            extra_http_headers={
-                "Accept-Language": "en-AU,en;q=0.9",
-                "DNT": "1",
-                "Pragma": "no-cache",
-                "Cache-Control": "no-cache",
-            },
-        )
-        page = context.new_page()
-
+    count = anchors.count()
+    for i in range(min(count, 3000)):  # cap for safety
         try:
-            for url in FORM_URLS:
-                # navigate and give the page time to render client content
-                page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                # wait for any anchors to appear (content arrives via JS)
-                page.wait_for_selector("a", timeout=15000)
-                # extra breathing room for late JS
-                page.wait_for_timeout(2500)
+            href = anchors.nth(i).get_attribute("href")
+            text = anchors.nth(i).inner_text(timeout=0).strip()
+        except Exception:
+            continue
+        href = normalize_href(href)
+        if not href:
+            continue
 
-                # Grab content for debugging
-                html = page.content()
-                last_html = html
-                # Snapshot only once (first page usually enough to understand blocking)
-                if not os.path.exists(debug_png_path):
-                    try:
-                        page.screenshot(path=debug_png_path, full_page=True)
-                    except Exception:
-                        pass
+        full = href
+        if href.startswith("/"):
+            from urllib.parse import urljoin
+            full = urljoin(base_url, href)
 
-                # Detect obvious block pages; keep status flag for the report
-                lower = html.lower()
-                if "access denied" in lower or "not available here" in lower or "403" in lower:
-                    final_status = max(final_status, 403)  # remember we saw a block
-                    continue  # try next URL
+        # Heuristic filters
+        if "greyhound" in full.lower() or "dogs" in full.lower():
+            if A_LIKE_MEETING.search(text) or "race-1" in full.lower() or "meeting" in full.lower():
+                if full not in hrefs:
+                    hrefs.add(full)
+                    meetings.append({
+                        "name": text[:120] or full[-120:],
+                        "url": full,
+                        "source": source,
+                    })
+    return meetings
 
-                # Collect anchors broadly, then filter
-                anchors = page.locator("a")
-                count = anchors.count()
-                for i in range(count):
-                    try:
-                        href = anchors.nth(i).get_attribute("href") or ""
-                        text = anchors.nth(i).inner_text().strip()
-                    except Exception:
-                        continue
-                    if not href:
-                        continue
-                    if looks_like_meeting(text, href):
-                        abs_url = absolutize(url, href)
-                        key = (text.lower(), abs_url)
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        meetings.append({"name": text, "url": abs_url})
+def scrape_source(play, url: str, out_dir: str, source_key: str) -> Dict:
+    ts = UTC_TS()
+    browser = play.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
+    ctx = browser.new_context(
+        locale="en-AU",
+        timezone_id="Australia/Sydney",
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        )
+    )
+    page = ctx.new_page()
+    status = None
+    html = ""
 
-                # If we found meetings on this URL, great — stop trying others
-                if meetings:
-                    break
+    try:
+        resp = page.goto(url, wait_until="networkidle", timeout=60000)
+        status = getattr(resp, "status", lambda: None)()
+        time.sleep(2)  # let lazy content settle
 
-        finally:
-            try:
-                # Always save debug HTML for diagnosis
-                with open(debug_html_path, "w", encoding="utf-8") as f:
-                    f.write(last_html or "<!-- empty -->")
-            except Exception:
-                pass
-            context.close()
+        # Some sites render content after user interaction; add a small scroll
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        time.sleep(1)
+        page.evaluate("window.scrollTo(0, 0)")
+        time.sleep(1)
+
+        # Save artifacts
+        html = page.content()
+        save_text(os.path.join(out_dir, f"debug_{source_key}_{ts}.html"), html)
+        page.screenshot(path=os.path.join(out_dir, f"page_{source_key}_{ts}.png"), full_page=True)
+
+        meetings = collect_meetings(page, url, source_key)
+        return {
+            "status": status or 0,
+            "meetings": meetings,
+            "ts": ts,
+            "source": source_key,
+        }
+    finally:
+        try:
+            ctx.close()
             browser.close()
+        except Exception:
+            pass
 
-    # Sort + dedupe by name then url for stable outputs
-    meetings.sort(key=lambda m: (m["name"].lower(), m["url"]))
-
-    # Write JSON
-    json_path = os.path.join(out_dir_abs, f"meetings_{ts}.json")
-    data = {
-        "fetched_at_utc": ts,
-        "status_code": final_status or (200 if meetings else 206),
-        "count": len(meetings),
-        "meetings": meetings,
-        "source_pages": FORM_URLS,
-    }
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-
-    # Write CSV (header only if none)
-    csv_path = os.path.join(out_dir_abs, f"full_day_{ts}.csv")
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["meeting_name", "meeting_url"])
-        for m in meetings:
-            writer.writerow([m["name"], m["url"]])
-
-    return data
+def write_csv(out_dir: str, ts: str, rows: List[Dict]):
+    csv_path = os.path.join(out_dir, f"full_day_{ts}.csv")
+    cols = ["meeting", "race", "time", "box", "runner", "odds", "meeting_url", "source"]
+    df = pd.DataFrame(rows, columns=cols)
+    df.to_csv(csv_path, index=False, encoding="utf-8")
+    return csv_path
 
 def main(out_dir: str) -> int:
     ensure_dir(out_dir)
-    out_dir = os.path.join(out_dir, OUT_SUBDIR)
-    ensure_dir(out_dir)
+    with sync_playwright() as p:
+        # Try RNS first
+        rns = scrape_source(p, RNS_URL, out_dir, "rns")
+        # Fallback to TheDogs if needed
+        meetings = rns["meetings"]
+        source_used = "rns"
+        if not meetings:
+            dogs = scrape_source(p, DOGS_URL, out_dir, "dogs")
+            if dogs["meetings"]:
+                meetings = dogs["meetings"]
+                source_used = "dogs"
 
-    report = scrape_meetings_with_playwright(out_dir)
-    status = report.get("status_code", 0)
-    count = report.get("count", 0)
+    ts = UTC_TS()
+    out_json = os.path.join(out_dir, f"meetings_{ts}.json")
+    save_json(out_json, {
+        "fetched_at_utc": ts,
+        "source_used": source_used,
+        "meetings": meetings,
+    })
 
-    print(f"status={status} meetings={count}")
-    print("wrote:", os.path.join(out_dir, f"meetings_{report['fetched_at_utc']}.json"))
-    print("saved debug:", os.path.join(out_dir, f"debug_{report['fetched_at_utc']}.html"))
+    # Stub: just write header CSV for now (we’ll enrich races once we lock the meeting selectors)
+    csv_path = write_csv(out_dir, ts, rows=[])
 
-    # ⚠️ Do NOT hard-fail when zero meetings; return 0 and let subsequent steps keep running.
-    # If you want the run to fail on zero found, change to `return 2 if count == 0 else 0`.
-    return 0
+    print(f"status={(rns['status'])} source={source_used} meetings={len(meetings)}")
+    print(f"wrote: {out_json}")
+    print(f"csv:   {csv_path}")
+    print("Saved debug HTML + screenshots alongside outputs.")
+    # Non-zero exit if both sources produced nothing to signal we need to tweak selectors
+    return 0 if meetings else 2
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--out-dir", default="data", help="parent output folder (default: data)")
-    args = parser.parse_args()
-    sys.exit(main(args.out_dir))
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out-dir", default="data/rns")
+    args = ap.parse_args()
+    raise SystemExit(main(args.out_dir))
