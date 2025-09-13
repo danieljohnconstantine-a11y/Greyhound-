@@ -1,14 +1,27 @@
-from __future__ import annotations
-import pandas as pd
-from pathlib import Path
+# src/model.py
+from typing import List, Dict
+from math import exp
+from collections import defaultdict
 
-# Placeholder for future calibration/history use
-HISTORY_FILE = Path("data/history_prob.csv")
+def softmax(vals):
+    mx = max(vals) if vals else 0.0
+    exps = [exp(v - mx) for v in vals]
+    s = sum(exps) or 1.0
+    return [x/s for x in exps]
 
-def predict_probabilities(features_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    For now, probabilities are already computed in features.py (column 'prob').
-    This function simply returns the dataframe unchanged so the rest of the
-    pipeline has a stable interface. Later you can add calibration here.
-    """
-    return features_df.copy()
+def score_and_prob(rows: List[Dict]) -> List[Dict]:
+    # Group by race, softmax box_prior
+    groups = defaultdict(list)
+    for r in rows:
+        key = (r["track"], r["date"], r["race"])
+        groups[key].append(r)
+
+    out: list[Dict] = []
+    for key, runners in groups.items():
+        scores = [r.get("box_prior", 0.0) for r in runners]
+        probs = softmax(scores)
+        for r, p in zip(runners, probs):
+            row = dict(r)
+            row["prob_win"] = round(p, 4)
+            out.append(row)
+    return out
