@@ -1,9 +1,9 @@
-name: Greyhounds — Racing & Sports Daily
+name: Greyhounds — Daily Multi-Source
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 0 * * *"   # 00:30 UTC daily (mid-morning AEST/AEDT)
+    - cron: "30 0 * * *"   # 00:30 UTC daily
 
 permissions:
   contents: write
@@ -11,13 +11,13 @@ permissions:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Python + Playwright deps
+      - name: System deps (for Playwright/Chromium)
         run: |
           sudo apt-get update
           sudo apt-get install -y libnss3 libatk1.0-0 libatk-bridge2.0-0 libxcb1 libx11-xcb1 \
@@ -28,7 +28,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install requirements
+      - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4 lxml pandas playwright
@@ -36,28 +36,29 @@ jobs:
 
       - name: Ensure output folders
         run: |
-          mkdir -p data/rns
+          mkdir -p data/rns data/thedogs data/combined
 
-      - name: Racing & Sports — full form
-        id: rns
-        shell: bash
-        run: |
-          set -euo pipefail
-          python src/rns_daily.py --out-dir data/rns
-        env:
-          TZ: Australia/Sydney
+      - name: Racing & Sports — scrape
+        env: { TZ: Australia/Sydney }
+        run: python src/rns_daily.py --out-dir data/rns
+
+      - name: TheDogs — scrape (fallback source)
+        env: { TZ: Australia/Sydney }
+        run: python src/thedogs_daily.py --out-dir data/thedogs
+
+      - name: Merge to one CSV
+        run: python src/merge_daily.py --rns-dir data/rns --dogs-dir data/thedogs --out-dir data/combined
 
       - name: Show previews
         if: always()
         run: |
           echo "== data/rns =="
           ls -lah data/rns || true
-          echo "== first files =="
-          for f in $(ls -1t data/rns/*.json 2>/dev/null | head -n 2); do
-            echo "--- $f ---"
-            head -n 80 "$f" || true
-          done
-          for f in $(ls -1t data/rns/*.csv 2>/dev/null | head -n 2); do
+          echo "== data/thedogs =="
+          ls -lah data/thedogs || true
+          echo "== data/combined =="
+          ls -lah data/combined || true
+          for f in $(ls -1t data/combined/*.csv 2>/dev/null | head -n 1); do
             echo "--- $f ---"
             head -n 40 "$f" || true
           done
@@ -66,12 +67,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rns-daily
+          name: greyhounds-daily
           path: |
-            data/rns/*.json
-            data/rns/*.csv
-            data/rns/*.html
-            data/rns/*.png
+            data/rns/*
+            data/thedogs/*
+            data/combined/*
           if-no-files-found: warn
 
       - name: Commit results
@@ -79,6 +79,6 @@ jobs:
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add -A data/rns
-          git commit -m "RNS scrape $(date -u +'%Y-%m-%dT%H:%M:%SZ')" || echo "Nothing to commit"
+          git add -A data/rns data/thedogs data/combined
+          git commit -m "Daily scrape $(date -u +'%Y-%m-%dT%H:%M:%SZ')" || echo "Nothing to commit"
           git push || echo "No changes to push"
