@@ -1,19 +1,10 @@
-# Core dependencies for Greyhound daily form guide project
-
-# HTTP + HTML parsing
-requests
-beautifulsoup4
-lxml
-
-# PDF parsing
-pdfminer.six
-
-# Data handling
-pandas
-numpy
-
-# Optional: plotting / evaluation (safe to leave in for future)
-matplotlib
-
-# For workflow automation (if you need YAML parsing or config)
-PyYAML
+pandas==2.2.2
+numpy==2.0.1
+beautifulsoup4==4.12.3
+lxml==5.2.2
+PyPDF2==3.0.1
+tenacity==8.5.0
+fake-useragent==1.5.1
+curl_cffi==0.6.2
+brotli==1.1.0
+python-dateutil==2.9.0.post0
