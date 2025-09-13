@@ -1,49 +1,47 @@
-from __future__ import annotations
-import re
-from pathlib import Path
-from datetime import datetime, date
-from dateutil import parser as dtparser
+import os, time, json, gzip, pathlib, random
+from datetime import datetime, timezone
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from fake_useragent import UserAgent
 
-DATE_FMT = "%Y-%m-%d"
+OUT_BASE = pathlib.Path("data")
+OUT_BASE.mkdir(parents=True, exist_ok=True)
 
-def ensure_dir(p: Path) -> Path:
+def utcstamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+def ensure_dir(p: pathlib.Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
-    return p
 
-def resolve_run_date(s: str | None) -> date:
-    if s in (None, "", "today"):
-        return date.today()
-    return dtparser.parse(s).date()
+def write_text(path: pathlib.Path, text: str) -> None:
+    ensure_dir(path.parent)
+    path.write_text(text, encoding="utf-8")
 
-def newest_form_for_date(forms_dir: Path, run_date: date) -> list[Path]:
-    wanted = []
-    ds = run_date.strftime("%Y-%m-%d")
-    for p in sorted(forms_dir.glob("*.pdf")):
-        if ds in p.name:
-            wanted.append(p)
-    if wanted:
-        return wanted
-    cutoff = datetime.now().timestamp() - 36*3600
-    return [p for p in forms_dir.glob("*.pdf") if p.stat().st_mtime >= cutoff]
+def write_json(path: pathlib.Path, obj) -> None:
+    ensure_dir(path.parent)
+    path.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
 
-TRACK_CODE_MAP = {
-    "RICH": "Richmond",
-    "HEAL": "Healesville",
-    "GAWL": "Gawler",
-    "GRAF": "Grafton",
-    "DRWN": "Darwin",
-    "QSTR": "QSTR",  # update later if needed
-}
+def write_bytes(path: pathlib.Path, b: bytes) -> None:
+    ensure_dir(path.parent)
+    path.write_bytes(b)
 
-BOX_RE = re.compile(r"^(?:Box\s*)?(\d{1})\b")
-RACE_RE = re.compile(r"\bRACE\s*(\d{1,2})\b", re.I)
-DIST_RE = re.compile(r"(\d{3,4})\s?m\b", re.I)
-DATE_IN_NAME = re.compile(r"(20\d{2}-\d{2}-\d{2})")
+def ua_string() -> str:
+    try:
+        return UserAgent().chrome
+    except Exception:
+        # simple fallback
+        return (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        )
 
-def infer_track_and_date_from_name(pdf: Path) -> tuple[str | None, str | None]:
-    base = pdf.stem
-    parts = base.split("_")
-    trk = TRACK_CODE_MAP.get(parts[0].upper(), None) if parts else None
-    m = DATE_IN_NAME.search(base)
-    d = m.group(1) if m else None
-    return trk, d
+def today_au():
+    # Use UTC date for consistency in CI; you can switch to AU if you self-host.
+    return datetime.utcnow().strftime("%Y-%m-%d")
+
+def env_proxy():
+    return os.environ.get("PROXY_URL", "").strip() or None
+
+class SoftError(RuntimeError):
+    """Non-fatal error; pipeline continues but notes issue."""
+    pass
