@@ -1,9 +1,9 @@
-name: Greyhounds — Daily Multi-Source
+name: Greyhounds — Daily scrape
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 0 * * *"   # 00:30 UTC daily
+    - cron: "10 4 * * *"   # 04:10 UTC (adjust if you like)
 
 permissions:
   contents: write
@@ -11,17 +11,10 @@ permissions:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: System deps (for Playwright/Chromium)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libnss3 libatk1.0-0 libatk-bridge2.0-0 libxcb1 libx11-xcb1 \
-                                  libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -31,7 +24,15 @@ jobs:
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 lxml pandas playwright
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install requests beautifulsoup4 lxml pandas playwright
+          fi
+
+      # ✅ Let Playwright install the right system packages & Chromium itself
+      - name: Install Playwright (browser + system deps)
+        run: |
           python -m playwright install --with-deps chromium
 
       - name: Ensure output folders
@@ -39,39 +40,30 @@ jobs:
           mkdir -p data/rns data/thedogs data/combined
 
       - name: Racing & Sports — scrape
-        env: { TZ: Australia/Sydney }
-        run: python src/rns_daily.py --out-dir data/rns
+        run: |
+          python src/rns_daily.py --out-dir data/rns
 
       - name: TheDogs — scrape (fallback source)
-        env: { TZ: Australia/Sydney }
-        run: python src/thedogs_daily.py --out-dir data/thedogs
+        run: |
+          python src/thedogs_daily.py --out-dir data/thedogs
 
       - name: Merge to one CSV
-        run: python src/merge_daily.py --rns-dir data/rns --dogs-dir data/thedogs --out-dir data/combined
+        run: |
+          python src/merge_daily.py --rns data/rns --dogs data/thedogs --out data/combined
 
       - name: Show previews
         if: always()
         run: |
-          echo "== data/rns =="
-          ls -lah data/rns || true
-          echo "== data/thedogs =="
-          ls -lah data/thedogs || true
-          echo "== data/combined =="
-          ls -lah data/combined || true
-          for f in $(ls -1t data/combined/*.csv 2>/dev/null | head -n 1); do
-            echo "--- $f ---"
-            head -n 40 "$f" || true
-          done
+          echo "=== R&S ==="; ls -lah data/rns || true; tail -n +1 -v data/rns/* 2>/dev/null | head -n 120 || true
+          echo "=== TheDogs ==="; ls -lah data/thedogs || true; tail -n +1 -v data/thedogs/* 2>/dev/null | head -n 120 || true
+          echo "=== Combined ==="; ls -lah data/combined || true; tail -n +1 -v data/combined/* 2>/dev/null | head -n 120 || true
 
       - name: Upload artifacts
-        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: greyhounds-daily
+          name: greyhounds-data
           path: |
-            data/rns/*
-            data/thedogs/*
-            data/combined/*
+            data/**/*
           if-no-files-found: warn
 
       - name: Commit results
@@ -79,6 +71,6 @@ jobs:
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add -A data/rns data/thedogs data/combined
+          git add -A data || true
           git commit -m "Daily scrape $(date -u +'%Y-%m-%dT%H:%M:%SZ')" || echo "Nothing to commit"
           git push || echo "No changes to push"
