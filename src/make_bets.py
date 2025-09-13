@@ -1,76 +1,56 @@
-# src/make_bets.py
-import argparse
-import os
-import json
+import csv, pathlib, math
 import pandas as pd
+from .utils import OUT_BASE, utcstamp
 
-def load_odds(odds_dir: str) -> pd.DataFrame:
-    """Load all odds JSON files into a DataFrame."""
-    rows = []
-    for fname in os.listdir(odds_dir):
-        if not fname.endswith(".json"):
-            continue
-        path = os.path.join(odds_dir, fname)
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        # expected Odds API format: events -> bookmakers -> markets -> outcomes
-        for ev in data.get("events", []):
-            sport = ev.get("sport_key")
-            commence = ev.get("commence_time")
-            for bm in ev.get("bookmakers", []):
-                bookie = bm["title"]
-                for market in bm.get("markets", []):
-                    market_key = market.get("key")
-                    for outcome in market.get("outcomes", []):
-                        rows.append({
-                            "sport": sport,
-                            "commence_time": commence,
-                            "bookmaker": bookie,
-                            "market": market_key,
-                            "name": outcome.get("name"),
-                            "price": outcome.get("price"),
-                        })
-    return pd.DataFrame(rows)
+IN_DIR = OUT_BASE / "combined"
+OUT_DIR = pathlib.Path("reports") / "latest"
+OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-
-def make_bets(prob_csv: str, odds_dir: str, out_csv: str):
-    """Merge probabilities with odds and compute expected value."""
-    probs = pd.read_csv(prob_csv)
-    odds = load_odds(odds_dir)
-
-    if probs.empty or odds.empty:
-        print("No data available to make bets.")
-        return
-
-    # Simple join on runner name
-    merged = probs.merge(
-        odds, left_on="runner", right_on="name", how="inner"
-    )
-
-    # Expected Value (EV) = p_win * price
-    merged["expected_value"] = merged["prob_win"] * merged["price"]
-
-    # Only keep strong bets (EV > 1.05 for example)
-    best = merged[merged["expected_value"] > 1.05].copy()
-    best.sort_values("expected_value", ascending=False, inplace=True)
-
-    os.makedirs(os.path.dirname(out_csv), exist_ok=True)
-    best.to_csv(out_csv, index=False)
-    print(f"Saved bets to {out_csv}")
-
-
-def parse_args():
-    p = argparse.ArgumentParser(description="Generate bets from probs + odds")
-    p.add_argument("--probs", required=True, help="Path to probabilities.csv")
-    p.add_argument("--odds", required=True, help="Directory with odds JSONs")
-    p.add_argument("--out", required=True, help="Output bets.csv")
-    return p.parse_args()
-
+def _sigmoid(x): return 1 / (1 + math.exp(-x))
 
 def main():
-    args = parse_args()
-    make_bets(args.probs, args.odds, args.out)
+    ts = utcstamp()
+    latest_csvs = sorted(IN_DIR.glob("full_day_*.csv"))
+    if not latest_csvs:
+        # create empty report to avoid failing pipeline
+        (OUT_DIR/"summary.md").write_text("# Summary — no data\n", encoding="utf-8")
+        return
 
+    df = pd.read_csv(latest_csvs[-1])
+    if df.empty:
+        (OUT_DIR/"summary.md").write_text("# Summary — empty data\n", encoding="utf-8")
+        return
+
+    # trainer prior (more runners entered → tiny edge)
+    t_prior = (df.groupby("trainer")["runner"].count() / len(df)).rename("trainer_freq")
+    # box bias (just counts)
+    b_prior = (df.groupby("box")["runner"].count() / len(df)).rename("box_freq")
+
+    dd = df.join(t_prior, on="trainer").join(b_prior, on="box").fillna(0)
+    # linear score then mapped to (0,1)
+    dd["score"] = dd["trainer_freq"] * 1.2 + dd["box_freq"] * 0.8
+    dd["prob_win"] = _sigmoid((dd["score"] - dd["score"].mean()) / (dd["score"].std() + 1e-6))
+
+    # Normalize probabilities within each race
+    dd["key"] = dd["track"].astype(str) + "|" + dd["date"].astype(str) + "|R" + dd["race"].astype(str)
+    dd["prob_win"] = dd.groupby("key")["prob_win"].transform(lambda s: s / s.sum())
+
+    # Save probabilities
+    probs_csv = OUT_DIR / "probabilities.csv"
+    dd[["track","date","race","box","runner","prob_win"]].to_csv(probs_csv, index=False)
+
+    # Simple picks (top box per race)
+    picks = (
+        dd.sort_values(["key","prob_win"], ascending=[True,False])
+          .groupby("key")
+          .head(1)
+    )
+
+    # Write summary
+    lines = [f"# Summary — {ts[:10]}", ""]
+    for _, r in picks.iterrows():
+        lines.append(f"- **{r['track']} R{int(r['race'])}** → Box **{int(r['box'])}** — {r['runner']} (p≈{r['prob_win']:.2f})")
+    (OUT_DIR/"summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 if __name__ == "__main__":
     main()
