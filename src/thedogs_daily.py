@@ -1,74 +1,53 @@
-#!/usr/bin/env python3
-import argparse, json, os, sys
-from datetime import datetime, timezone
+import os
+import json
+from datetime import datetime
+from playwright.sync_api import sync_playwright
 
-def utcstamp():
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+URL = "https://thedogs.com.au/racing"
 
-"""
-Very defensive: we use Playwright to pull the main racing page HTML,
-save it (debug) and attempt a light parse for meeting cards. If anything
-fails, we still emit a JSON with count=0 so the pipeline doesn't break.
-"""
+def fetch_page(url: str) -> str:
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled"]
+        )
+        page = browser.new_page(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/126.0.0.0 Safari/537.36"
+        )
+        page.goto(url, timeout=60000)
+        html = page.content()
+        browser.close()
+        return html
 
-def main(out_dir: str) -> int:
-    ts = utcstamp()
+def main(out_dir: str):
     os.makedirs(out_dir, exist_ok=True)
-
-    status = 520
-    meetings = []
-    html = ""
-    png_path = os.path.join(out_dir, f"page_{ts}.png")
-    debug_path = os.path.join(out_dir, f"debug_{ts}.html")
+    fetched_at = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
 
     try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
-            ctx = browser.new_context(locale="en-AU", timezone_id="Australia/Sydney")
-            page = ctx.new_page()
-            resp = page.goto("https://www.thedogs.com.au/racing", wait_until="domcontentloaded", timeout=45000)
-            status = resp.status if resp else 0
-            page.wait_for_timeout(2000)  # small settle
-            html = page.content()
-            try:
-                page.screenshot(path=png_path, full_page=True)
-            except:
-                pass
-            # Minimal heuristic parse (site markup can vary)
-            # Keep it super-safe: don't throw on parse errors.
-            try:
-                cards = page.locator("a:has-text('Race')").all()
-                # This is intentionally loose — reliable selectors can be added later.
-                # We'll just note we touched the page.
-                if cards:
-                    meetings = [{"name":"TheDogs - see site", "url":"https://www.thedogs.com.au/racing"}]
-            except:
-                pass
-            ctx.close(); browser.close()
+        html = fetch_page(URL)
+        debug_file = os.path.join(out_dir, f"debug_{fetched_at}.html")
+        with open(debug_file, "w", encoding="utf-8") as f:
+            f.write(html)
+
+        json_file = os.path.join(out_dir, f"meetings_{fetched_at}.json")
+        data = {
+            "fetched_at_utc": fetched_at,
+            "url": URL,
+            "meetings": []
+        }
+        with open(json_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+        print(f"[thedogs] saved debug={debug_file}, json={json_file}")
+
     except Exception as e:
-        html = f"Playwright failure: {e}"
-
-    # Save debug HTML always
-    with open(debug_path, "w", encoding="utf-8") as f:
-        f.write(html or "")
-
-    out_json = {
-        "fetched_at_utc": ts,
-        "source": "thedogs",
-        "status_code": status,
-        "count": len(meetings),
-        "meetings": meetings,
-    }
-    json_path = os.path.join(out_dir, f"meetings_{ts}.json")
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(out_json, f, ensure_ascii=False, indent=2)
-
-    print(f"[thedogs] status={status} meetings={len(meetings)}")
-    return 0
+        print(f"[thedogs] error: {e}")
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--out-dir", required=True)
-    args = ap.parse_args()
-    sys.exit(main(args.out_dir))
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--out-dir", required=True)
+    args = parser.parse_args()
+    main(args.out_dir)
