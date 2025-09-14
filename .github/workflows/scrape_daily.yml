@@ -1,22 +1,17 @@
 name: Greyhounds — Daily scrape
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
   schedule:
-    # 09:05 AEST daily ≈ 23:05 UTC; adjust if you want
-    - cron: "5 23 * * *"
+    # 08:00 AEST every day (23:00 UTC previous day)
+    - cron: "0 23 * * *"
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    env:
-      PYTHONDONTWRITEBYTECODE: "1"
-      PYTHONUNBUFFERED: "1"
 
     steps:
       - name: Checkout
@@ -34,39 +29,31 @@ jobs:
 
       - name: Ensure folders
         run: |
-          mkdir -p forms
-          mkdir -p data/rns
-          mkdir -p reports/latest
+          mkdir -p forms data/rns reports/latest
 
-      - name: Fetch R&S PDFs (auto-discover + pattern fallback)
+      - name: Fetch + Parse + Report
+        env:
+          TZ: Australia/Sydney
         run: |
-          python fetch_forms.py --out forms --min-pdfs 1
-          ls -lah forms || true
-
-      - name: Build reports from PDFs
-        run: |
-          python src/run_daily.py
-          ls -lah reports/latest || true
-          ls -lah data/rns || true
+          python src/run_daily.py --out-forms forms --out-rns data/rns --out-reports reports
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: greyhounds-output
+          name: greyhounds-data
           path: |
-            forms/**
-            data/rns/**
-            reports/latest/**
-          if-no-files-found: warn
+            forms/*.pdf
+            data/rns/*.csv
+            reports/latest/*
 
       - name: Commit results
         run: |
-          git config --local user.email "actions-user@users.noreply.github.com"
-          git config --local user.name "actions-user"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
           git add -A
-          if git diff --staged --quiet; then
+          if git diff --cached --quiet; then
             echo "No changes to commit."
           else
-            git commit -m "Daily scrape: forms + parsed + reports"
+            git commit -m "daily: fetch+parse+report"
             git push
           fi
