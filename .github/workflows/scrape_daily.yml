@@ -1,10 +1,10 @@
 name: Greyhounds — Daily scrape
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
   schedule:
-    # run daily at 00:05 UTC (morning AEST)
-    - cron: "5 0 * * *"
+    # 09:05 AEST daily ≈ 23:05 UTC; adjust if you want
+    - cron: "5 23 * * *"
 
 permissions:
   contents: write
@@ -12,7 +12,11 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
 
     steps:
       - name: Checkout
@@ -28,41 +32,41 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Ensure output folders
+      - name: Ensure folders
         run: |
-          mkdir -p data/rns data/thedogs data/combined reports/latest
+          mkdir -p forms
+          mkdir -p data/rns
+          mkdir -p reports/latest
 
-      # Build reports from whatever valid track PDFs exist in ./forms
-      - name: Build from PDFs
+      - name: Fetch R&S PDFs (auto-discover + pattern fallback)
+        run: |
+          python fetch_forms.py --out forms --min-pdfs 1
+          ls -lah forms || true
+
+      - name: Build reports from PDFs
         run: |
           python src/run_daily.py
-
-      - name: Show previews
-        if: always()
-        run: |
-          echo "Latest reports:"
           ls -lah reports/latest || true
-          echo "Parsed files:"
           ls -lah data/rns || true
 
       - name: Upload artifacts
-        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: greyhounds-data
+          name: greyhounds-output
           path: |
-            reports/latest/**
+            forms/**
             data/rns/**
+            reports/latest/**
           if-no-files-found: warn
 
       - name: Commit results
         run: |
-          git config --local user.email "actions-user@github.com"
+          git config --local user.email "actions-user@users.noreply.github.com"
           git config --local user.name "actions-user"
-          git add reports/latest data/rns
+          git add -A
           if git diff --staged --quiet; then
-            echo "No file changes to commit."
+            echo "No changes to commit."
           else
-            git commit -m "Auto: update reports and parsed CSVs"
+            git commit -m "Daily scrape: forms + parsed + reports"
             git push
           fi
