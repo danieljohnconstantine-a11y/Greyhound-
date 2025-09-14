@@ -1,73 +1,48 @@
-# src/odds_client.py
-import argparse
-import os
-import requests
-import json
-import time
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Lightweight odds reader.
+
+We avoid bookmaker scraping. Instead, if you place a CSV at ./forms/odds.csv
+the pipeline will use it automatically.
+
+Expected columns (header required), one row per runner:
+track,date,race,box,odds_decimal
+
+Example:
+QSTR,2025-09-08,1,2,5.50
+QSTR,2025-09-08,1,3,3.80
+...
+
+Notes:
+- track: the same code as the PDF file prefix (e.g., QSTR, HEAL, SALE, etc.)
+- date: YYYY-MM-DD (match the PDF date)
+- race: integer
+- box: 1..8
+- odds_decimal: > 1.01
+"""
+
+from __future__ import annotations
+from pathlib import Path
+import pandas as pd
 
 
-def fetch_odds(api_key: str, sport_key: str, regions: str, markets: str, date: str) -> dict:
-    """
-    Fetch odds from The Odds API.
-    """
-    url = (
-        f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds"
-        f"?apiKey={api_key}&regions={regions}&markets={markets}"
-        f"&oddsFormat=decimal&dateFormat=iso"
-    )
-    print(f"[info] Requesting: {url}")
+COLUMNS = ["track","date","race","box","odds_decimal"]
 
-    resp = requests.get(url, timeout=15)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def save_json(data: dict, out_path: str):
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-    print(f"[info] Saved odds to {out_path}")
-
-
-def parse_args():
-    p = argparse.ArgumentParser(description="Fetch odds from The Odds API")
-    p.add_argument("--api-key", required=True, help="API key for The Odds API")
-    p.add_argument("--sport", required=True, help="Sport key (e.g. greyhound_racing_aus)")
-    p.add_argument("--regions", default="au", help="Regions to include")
-    p.add_argument("--markets", default="h2h", help="Markets to include")
-    p.add_argument("--date", default="today", help="Date (today or YYYY-MM-DD)")
-    p.add_argument("--out-dir", required=True, help="Directory to store results")
-    return p.parse_args()
-
-
-def main() -> int:
-    args = parse_args()
-
-    if not args.sport or args.sport == "null":
-        print("[error] No valid sport key provided. Please check data/sports.json.")
-        return 2
-
-    try:
-        events = fetch_odds(args.api_key, args.sport, args.regions, args.markets, args.date)
-    except requests.HTTPError as e:
-        print(f"[error] HTTPError: {e}")
-        return 2
-    except Exception as e:
-        print(f"[error] Fetch failed: {e}")
-        return 2
-
-    # Save timestamped dump
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    raw_path = os.path.join(args.out_dir, f"events-raw-{stamp}.json")
-    save_json({"events": events}, raw_path)
-
-    # Save stable (latest) dump
-    stable_path = os.path.join(args.out_dir, "events.json")
-    save_json({"events": events}, stable_path)
-
-    print(f"[info] Fetched {len(events)} events")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+def load_odds(csv_path: str | Path = "forms/odds.csv") -> pd.DataFrame:
+    p = Path(csv_path)
+    if not p.exists():
+        return pd.DataFrame(columns=COLUMNS)
+    df = pd.read_csv(p)
+    # Normalise schema
+    missing = [c for c in COLUMNS if c not in df.columns]
+    if missing:
+        raise ValueError(f"odds.csv missing columns: {missing}")
+    df = df[COLUMNS].copy()
+    df["track"] = df["track"].astype(str).str.upper()
+    df["date"] = df["date"].astype(str)
+    df["race"] = df["race"].astype(int)
+    df["box"] = df["box"].astype(int)
+    df["odds_decimal"] = df["odds_decimal"].astype(float)
+    df = df[(df["odds_decimal"] >= 1.01) & (df["box"].between(1,8))]
+    return df.reset_index(drop=True)
