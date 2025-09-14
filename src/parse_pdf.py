@@ -1,70 +1,137 @@
-import re, pathlib, csv
-from PyPDF2 import PdfReader
-from .utils import OUT_BASE, utcstamp
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-FORMS_DIR = pathlib.Path("forms")
-OUT_DIR = OUT_BASE / "combined"
+"""
+Parse Racing & Sports greyhound form PDFs into a normalized dataframe.
 
-ROW = ["track", "date", "race", "box", "runner", "trainer"]
+Input:
+  ./forms/*.pdf              (only track files like QSTR_2025-09-08.pdf)
 
-def _extract_text(pdf_path: pathlib.Path) -> str:
-    txt = []
-    try:
-        reader = PdfReader(str(pdf_path))
-        for page in reader.pages:
-            t = page.extract_text() or ""
-            txt.append(t)
-    except Exception as e:
-        txt.append(f"__ERROR__ {e}")
-    return "\n".join(txt)
+Output (returned as pandas.DataFrame):
+  columns = ["track","date","race","box","runner"]
 
-def _parse_blocks(text: str, default_track: str):
-    # Very loose heuristics: look for patterns "RACE 1", "Box 2  RunnerName (Trainer)"
-    # Adjust as needed for your preferred PDF layout.
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-    track = default_track
-    date = ""
-    race = None
+Notes:
+- We ignore any PDF that doesn't match ^[A-Z]{3,5}_YYYY-MM-DD\.pdf
+- We tolerate small layout differences by scanning text lines.
+- We don't try to extract odds here; this is structure-first.
+"""
 
-    results = []
+from __future__ import annotations
 
-    # infer track/date from top lines if present
-    for l in lines[:20]:
-        m = re.search(r"(?:Track|Venue)[:\s]+([A-Za-z \-]+)", l, re.I)
-        if m: track = m.group(1).strip().upper()
-        d = re.search(r"(\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{2}-\d{2})", l)
-        if d: date = d.group(1)
+import re
+from pathlib import Path
+from typing import Iterable, List, Tuple
 
-    for l in lines:
-        r = re.search(r"\bRACE\s*(\d+)\b", l, re.I)
-        if r:
-            race = int(r.group(1))
+import pdfplumber
+import pandas as pd
+
+
+VALID_FILE_RE = re.compile(r"^(?P<track>[A-Z]{3,5})_(?P<date>\d{4}-\d{2}-\d{2})\.pdf$")
+
+# Race header patterns commonly seen across R&S PDFs
+RACE_HEADER_RE = re.compile(r"^(?:RACE|Race)\s*(?P<race>\d{1,2})\b")
+
+# Runner line patterns:
+#   "Box 1  DOG NAME ..."  or "1 DOG NAME ..." (some PDFs omit the word "Box")
+BOX_LINE_RE = re.compile(
+    r"^(?:Box\s*)?(?P<box>[1-8])\b[\s\-:]+(?P<name>[A-Za-z0-9'().\- ]{2,})"
+)
+
+# Fallback when the above doesn't trip but the line looks like "1  DOG NAME"
+BOX_FALLBACK_RE = re.compile(
+    r"^(?P<box>[1-8])\s+(?P<name>[A-Za-z0-9'().\- ]{2,})"
+)
+
+
+def iter_valid_pdfs(forms_dir: Path) -> Iterable[Tuple[Path, str, str]]:
+    for pdf_path in sorted(forms_dir.glob("*.pdf")):
+        m = VALID_FILE_RE.match(pdf_path.name)
+        if not m:
             continue
-        m = re.search(r"\b[Bb]ox\s*(\d+)\s+([A-Za-z' \-]+)\s*(?:\(([^)]+)\))?", l)
-        if m and race is not None:
-            box = int(m.group(1))
-            runner = m.group(2).strip()
-            trainer = (m.group(3) or "").strip()
-            if runner and len(runner) >= 2:
-                results.append([track, date, race, box, runner, trainer])
-    return results
+        yield pdf_path, m.group("track"), m.group("date")
 
-def main():
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    ts = utcstamp()
-    rows = []
 
-    for pdf in sorted(FORMS_DIR.glob("*.pdf")):
-        text = _extract_text(pdf)
-        track_guess = pdf.stem.split("_")[0].upper()
-        rows.extend(_parse_blocks(text, track_guess))
+def extract_text_lines(pdf_path: Path) -> List[str]:
+    lines: List[str] = []
+    with pdfplumber.open(str(pdf_path)) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text() or ""
+            # Normalize Windows newlines and trim whitespace
+            for raw in text.splitlines():
+                line = " ".join(raw.strip().split())
+                if line:
+                    lines.append(line)
+    return lines
 
-    out_csv = OUT_DIR / f"full_day_{ts}.csv"
-    with out_csv.open("w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(ROW)
-        for r in rows:
-            w.writerow(r)
+
+def parse_pdf(pdf_path: Path, track: str, date_str: str) -> pd.DataFrame:
+    """
+    Return rows for one PDF: columns track, date, race, box, runner
+    """
+    rows: List[Tuple[str, str, int, int, str]] = []
+    lines = extract_text_lines(pdf_path)
+
+    current_race: int | None = None
+    for line in lines:
+        # Race header?
+        mr = RACE_HEADER_RE.search(line)
+        if mr:
+            try:
+                current_race = int(mr.group("race"))
+            except Exception:
+                current_race = None
+            continue
+
+        if current_race is None:
+            continue  # skip until we see a race header
+
+        # Runner lines
+        mb = BOX_LINE_RE.search(line)
+        if not mb:
+            mb = BOX_FALLBACK_RE.search(line)
+
+        if mb:
+            try:
+                box = int(mb.group("box"))
+                name = mb.group("name").strip(" -–•.")
+                # prune trailing trainer or bracket chunks if fused
+                name = re.sub(r"\s*\(.*$", "", name).strip()
+                if name:
+                    rows.append((track, date_str, current_race, box, name))
+            except Exception:
+                pass
+
+    df = pd.DataFrame(rows, columns=["track", "date", "race", "box", "runner"])
+    # Deduplicate in case both patterns match the same line
+    if not df.empty:
+        df = (
+            df.drop_duplicates(["track", "date", "race", "box"])
+            .sort_values(["track", "date", "race", "box"])
+            .reset_index(drop=True)
+        )
+    return df
+
+
+def parse_forms(forms_dir: str | Path = "forms") -> pd.DataFrame:
+    forms_dir = Path(forms_dir)
+    all_parts: List[pd.DataFrame] = []
+
+    for pdf_path, track, date_str in iter_valid_pdfs(forms_dir):
+        try:
+            part = parse_pdf(pdf_path, track, date_str)
+            if not part.empty:
+                all_parts.append(part)
+        except Exception as e:
+            # Don't crash the whole run for a single bad PDF; just skip.
+            print(f"[parse] WARN skipping {pdf_path.name}: {e}")
+
+    if not all_parts:
+        return pd.DataFrame(columns=["track", "date", "race", "box", "runner"])
+
+    df = pd.concat(all_parts, ignore_index=True)
+    return df
+
 
 if __name__ == "__main__":
-    main()
+    out = parse_forms("forms")
+    print(out.head(20).to_string(index=False))
