@@ -1,52 +1,31 @@
-import re, pathlib
-from bs4 import BeautifulSoup
-from .http_client import fetch
-from .utils import utcstamp, write_json, write_text, OUT_BASE
+#!/usr/bin/env python3
+"""
+rns_daily.py
+Thin wrapper for fetch_forms.py so the workflow has a single, clear “fetch” step.
+Exits non-zero if no valid PDFs were saved, to prevent empty reports/commits.
+"""
 
-OUT_DIR = OUT_BASE / "rns"
+from __future__ import annotations
+import argparse
+import sys
+from pathlib import Path
 
-INDEX_CANDIDATES = [
-    # common public index pages where the PDFs are linked from
-    "https://www.racingandsports.com.au/form-guide/greyhound",
-    "https://www.racingandsports.com.au/form-guide",
-]
+from fetch_forms import fetch_all
 
-def find_pdfs(html: str):
-    soup = BeautifulSoup(html, "lxml")
-    urls = []
-    for a in soup.select("a[href]"):
-        href = a["href"]
-        if ".pdf" in href and ("grey" in href or "form" in href or "newformpdf" in href):
-            if href.startswith("/"):
-                href = "https://www.racingandsports.com.au" + href
-            urls.append(href)
-    return sorted(set(urls))
 
 def main():
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    ts = utcstamp()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", "--out-dir", dest="out_dir", default="forms", help="Directory to save PDFs")
+    args = ap.parse_args()
+    out_dir = Path(args.out_dir)
 
-    all_pdfs = []
-    status_map = {}
-    debug_concat = []
-    for url in INDEX_CANDIDATES:
-        try:
-            r = fetch(url)
-            status_map[url] = r.status_code
-            debug_concat.append(f"### {url}\n\n{r.text}\n")
-            all_pdfs.extend(find_pdfs(r.text))
-        except Exception as e:
-            status_map[url] = f"ERROR: {e}"
-            debug_concat.append(f"### {url}\n\nERROR: {e}\n")
+    saved = fetch_all(out_dir)
+    print(f"[rns_daily] valid PDFs saved: {saved}")
+    if saved <= 0:
+        print("[rns_daily] no valid forms found — failing job to avoid empty data.")
+        sys.exit(2)
+    return 0
 
-    write_text(OUT_DIR / f"debug_{ts}.html", "\n\n".join(debug_concat))
-    write_json(OUT_DIR / f"meetings_{ts}.json", {
-        "fetched_at_utc": ts,
-        "source": "rns",
-        "status_by_url": status_map,
-        "count": len(all_pdfs),
-        "pdfs": all_pdfs,
-    })
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
