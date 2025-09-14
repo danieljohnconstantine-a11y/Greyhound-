@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Parse Racing & Sports greyhound form PDFs into a normalized dataframe.
+Parse Racing & Sports greyhound PDFs into a dataframe.
 
-We only accept files named like: TRACK_YYYY-MM-DD.pdf (e.g., QSTR_2025-09-08.pdf)
-
-Output columns: track, date, race, box, runner
+Accepts only files named: TRACK_YYYY-MM-DD.pdf
+Outputs columns: track, date, race, box, runner
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ from typing import Iterable, List, Tuple
 import pdfplumber
 import pandas as pd
 
-VALID_FILE_RE = re.compile(r"^(?P<track>[A-Z]{3,5})_(?P<date>\d{4}-\d{2}-\d{2})\.pdf$")
+VALID_FILE_RE = re.compile(r"^(?P<track>[A-Z]{3,6})_(?P<date>\d{4}-\d{2}-\d{2})\.pdf$")
 RACE_HEADER_RE = re.compile(r"^(?:RACE|Race)\s*(?P<race>\d{1,2})\b")
 BOX_LINE_RE = re.compile(r"^(?:Box\s*)?(?P<box>[1-8])\b[\s\-:]+(?P<name>[A-Za-z0-9'().\- ]{2,})")
 BOX_FALLBACK_RE = re.compile(r"^(?P<box>[1-8])\s+(?P<name>[A-Za-z0-9'().\- ]{2,})")
@@ -23,9 +22,8 @@ BOX_FALLBACK_RE = re.compile(r"^(?P<box>[1-8])\s+(?P<name>[A-Za-z0-9'().\- ]{2,}
 def iter_valid_pdfs(forms_dir: Path) -> Iterable[Tuple[Path, str, str]]:
     for pdf_path in sorted(forms_dir.glob("*.pdf")):
         m = VALID_FILE_RE.match(pdf_path.name)
-        if not m:
-            continue
-        yield pdf_path, m.group("track"), m.group("date")
+        if m:
+            yield pdf_path, m.group("track"), m.group("date")
 
 def extract_text_lines(pdf_path: Path) -> List[str]:
     lines: List[str] = []
@@ -51,7 +49,6 @@ def parse_pdf(pdf_path: Path, track: str, date_str: str) -> pd.DataFrame:
             except Exception:
                 current_race = None
             continue
-
         if current_race is None:
             continue
 
@@ -68,8 +65,8 @@ def parse_pdf(pdf_path: Path, track: str, date_str: str) -> pd.DataFrame:
 
     df = pd.DataFrame(rows, columns=["track", "date", "race", "box", "runner"])
     if not df.empty:
-        df = (df.drop_duplicates(["track", "date", "race", "box"])
-                .sort_values(["track", "date", "race", "box"])
+        df = (df.drop_duplicates(["track","date","race","box"])
+                .sort_values(["track","date","race","box"])
                 .reset_index(drop=True))
     return df
 
