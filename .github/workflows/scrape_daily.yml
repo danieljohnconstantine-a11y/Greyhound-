@@ -1,22 +1,18 @@
 name: Greyhounds — Daily scrape
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
   schedule:
-    # 9:00 AM AEST daily = 23:00 UTC (adjust if you want)
-    - cron: "0 23 * * *"
+    # run daily at 00:05 UTC (morning AEST)
+    - cron: "5 0 * * *"
 
 permissions:
   contents: write
 
 jobs:
-  scrape:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    env:
-      PYTHONDONTWRITEBYTECODE: "1"
-      PYTHONUNBUFFERED: "1"
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -34,94 +30,39 @@ jobs:
 
       - name: Ensure output folders
         run: |
-          mkdir -p forms
-          mkdir -p data/rns
-          mkdir -p data/thedogs
-          mkdir -p data/combined
-          mkdir -p reports/latest
+          mkdir -p data/rns data/thedogs data/combined reports/latest
 
-      # ---------- FORMS (Racing & Sports) ----------
-      - name: Fetch form PDFs (Racing & Sports)
-        id: fetch_forms
+      # Build reports from whatever valid track PDFs exist in ./forms
+      - name: Build from PDFs
         run: |
-          set -e
-          python fetch_forms.py --out forms || true
-          echo "forms_count=$(ls -1 forms/*.pdf 2>/dev/null | wc -l | tr -d ' ')" >> $GITHUB_OUTPUT
-          echo "Fetched $(ls -1 forms/*.pdf 2>/dev/null | wc -l) PDFs."
+          python src/run_daily.py
 
-      # ---------- PARSE FORMS ----------
-      - name: Parse PDFs → structured data
-        if: steps.fetch_forms.outputs.forms_count != '0'
-        run: |
-          python src/parse_pdf.py forms data/rns || true
-          echo "RNS JSON files: $(ls -1 data/rns 2>/dev/null | wc -l)"
-
-      # ---------- THEDOGS (FALLBACK) ----------
-      - name: TheDogs — scrape (fallback source)
-        continue-on-error: true
-        run: |
-          # This step is allowed to fail or produce nothing
-          if [ -f src/thedogs_daily.py ]; then
-            python src/thedogs_daily.py --out-dir data/thedogs || true
-          fi
-          echo "TheDogs JSON files: $(ls -1 data/thedogs 2>/dev/null | wc -l)"
-
-      # ---------- MERGE ----------
-      - name: Merge to one CSV/JSON
-        run: |
-          python src/merge_daily.py --rns data/rns --dogs data/thedogs --out data/combined || true
-          echo "Combined files: $(ls -1 data/combined 2>/dev/null | wc -l)"
-
-      # ---------- PREDICTIONS ----------
-      - name: Generate predictions
-        run: |
-          if [ -s data/combined/combined.csv ] || [ "$(ls -1 data/rns 2>/dev/null | wc -l)" != "0" ]; then
-            python src/make_bets.py data/combined reports/latest || true
-          fi
-
-      # ---------- GUARANTEE A SUMMARY ----------
-      - name: Ensure summary exists
-        run: |
-          if [ ! -f reports/latest/summary.md ]; then
-            echo "Summary — empty data" > reports/latest/summary.md
-          fi
-          if [ ! -f reports/latest/probabilities.csv ]; then
-            printf "track,date,race,box,runner,prob_win\n" > reports/latest/probabilities.csv
-          fi
-
-      # ---------- PREVIEWS ----------
       - name: Show previews
+        if: always()
         run: |
-          echo "=== forms ==="
-          ls -l forms || true
-          echo "=== data/rns ==="
-          ls -l data/rns || true
-          echo "=== data/thedogs ==="
-          ls -l data/thedogs || true
-          echo "=== data/combined ==="
-          ls -l data/combined || true
-          echo "=== reports/latest ==="
-          ls -l reports/latest || true
+          echo "Latest reports:"
+          ls -lah reports/latest || true
+          echo "Parsed files:"
+          ls -lah data/rns || true
 
-      # ---------- ARTIFACT ----------
       - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: greyhounds-data
           path: |
-            forms
-            data
-            reports/latest
+            reports/latest/**
+            data/rns/**
+          if-no-files-found: warn
 
-      # ---------- COMMIT RESULTS ----------
-      - name: Commit results to repo
+      - name: Commit results
         run: |
-          git config --local user.name  "actions-user"
-          git config --local user.email "actions@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
+          git config --local user.email "actions-user@github.com"
+          git config --local user.name "actions-user"
+          git add reports/latest data/rns
+          if git diff --staged --quiet; then
+            echo "No file changes to commit."
           else
-            git commit -m "Daily scrape: update forms/data/reports [skip ci]"
+            git commit -m "Auto: update reports and parsed CSVs"
             git push
           fi
