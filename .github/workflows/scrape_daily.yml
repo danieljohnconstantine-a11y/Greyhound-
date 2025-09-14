@@ -3,8 +3,8 @@ name: Greyhounds — Daily scrape
 on:
   workflow_dispatch:
   schedule:
-    # 08:00 AEST every day (23:00 UTC previous day)
-    - cron: "0 23 * * *"
+    # 06:05 AEST daily
+    - cron: '5 20 * * *'
 
 permissions:
   contents: write
@@ -20,40 +20,47 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
-      - name: Install Python deps
+      - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Ensure folders
+      - name: Ensure output folders
         run: |
-          mkdir -p forms data/rns reports/latest
+          mkdir -p forms
+          mkdir -p reports/latest
 
-      - name: Fetch + Parse + Report
+      - name: Racing & Sports — fetch PDFs
         env:
           TZ: Australia/Sydney
         run: |
-          python src/run_daily.py --out-forms forms --out-rns data/rns --out-reports reports
+          python -u src/rns_daily.py --out forms
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: greyhounds-data
-          path: |
-            forms/*.pdf
-            data/rns/*.csv
-            reports/latest/*
+      - name: Build summary
+        run: |
+          python -u src/merge_daily.py --forms forms --out reports/latest
+
+      - name: Show summary preview
+        if: success()
+        run: |
+          echo "==== reports/latest/summary.md ===="
+          cat reports/latest/summary.md || true
+          echo
+          echo "==== forms/ (ls) ===="
+          ls -la forms
 
       - name: Commit results
+        if: success()
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
+          git config --local user.email "actions[bot]@users.noreply.github.com"
+          git config --local user.name "actions-user"
           git add -A
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else
-            git commit -m "daily: fetch+parse+report"
+            msg="chore: update forms and summary ($(date -u +'%Y-%m-%dT%H:%M:%SZ'))"
+            git commit -m "$msg"
             git push
           fi
