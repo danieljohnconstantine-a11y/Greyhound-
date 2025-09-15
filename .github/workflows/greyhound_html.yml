@@ -12,7 +12,7 @@ permissions:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -34,11 +34,14 @@ jobs:
 
       - name: Fetch + Parse HTML forms → build reports
         env:
-          TZ: Australia/Sydney
+          TZ: Australia/Brisbane
+          # Optional: override to test a single meeting page if discovery is flaky
+          # ONE_MEETING_URL: "https://www.racingandsports.com.au/form-guide/greyhound/<track-slug>/<meeting-id>"
         run: |
+          set -euo pipefail
           python -u src/run_daily_html.py
 
-      - name: Show outputs
+      - name: Show counts
         if: always()
         run: |
           echo "== reports/latest =="
@@ -47,9 +50,17 @@ jobs:
           echo "== data/html =="
           ls -lah data/html || true
           echo
-          test -f reports/latest/summary.md && sed -n '1,120p' reports/latest/summary.md || true
+          test -f reports/latest/summary.md && sed -n '1,160p' reports/latest/summary.md || true
 
-      - name: Commit results
+      - name: Upload debug HTML (index & meetings)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: html-debug
+          path: data/html/debug/**/*
+          if-no-files-found: warn
+
+      - name: Commit results (only when non-empty)
         if: success()
         run: |
           git config --local user.email "actions-user@users.noreply.github.com"
