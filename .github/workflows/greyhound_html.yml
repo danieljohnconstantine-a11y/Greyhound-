@@ -3,8 +3,13 @@ name: Greyhounds — HTML form scrape (R&S)
 on:
   workflow_dispatch:
   schedule:
-    # ~08:05 AEST daily (23:05 UTC previous day)
+    # Multiple morning passes AEST (Brisbane = UTC+10)
+    # 06:05, 07:05, 08:05, 09:05, 10:05 AEST  → 20:05,21:05,22:05,23:05,00:05 UTC
+    - cron: "5 20 * * *"
+    - cron: "5 21 * * *"
+    - cron: "5 22 * * *"
     - cron: "5 23 * * *"
+    - cron: "5 0 * * *"
 
 permissions:
   contents: write
@@ -12,7 +17,7 @@ permissions:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -30,18 +35,20 @@ jobs:
 
       - name: Ensure folders
         run: |
-          mkdir -p data/html reports/latest
+          mkdir -p data/html/debug reports/latest
+          # Optional operator-maintained seed list of meeting URLs
+          touch data/html/seed_urls.txt
 
       - name: Fetch + Parse HTML forms → build reports
         env:
           TZ: Australia/Brisbane
-          # Optional: override to test a single meeting page if discovery is flaky
-          # ONE_MEETING_URL: "https://www.racingandsports.com.au/form-guide/greyhound/<track-slug>/<meeting-id>"
+          # Optional single-meeting override for quick tests:
+          # ONE_MEETING_URL: "https://www.racingandsports.com.au/form-guide/greyhound/<track>/<meeting-id>"
         run: |
           set -euo pipefail
           python -u src/run_daily_html.py
 
-      - name: Show counts
+      - name: Show outputs
         if: always()
         run: |
           echo "== reports/latest =="
