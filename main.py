@@ -214,7 +214,11 @@ def main():
         
     else:
         print("\n⚠️  No data extracted from any PDF files.")
-        print("Please check the PDF formats and try again.\n")
+        print("Please check that:")
+        print("  • PDFs are Racing & Sports greyhound race form guides")
+        print("  • PDFs contain race entries (not just results)")
+        print("  • PDFs have the expected multi-column format")
+        print("\nFor troubleshooting and supported formats, see PIPELINE_README.md\n")
 
 
 if __name__ == "__main__":

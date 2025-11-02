@@ -109,8 +109,10 @@ def parse_dog_line(words: List[Dict], start_idx: int) -> Optional[Dict]:
         else:
             break
     
+    # Join all name parts without arbitrary length limits
+    # Most dog names are 2-3 words, but some may be longer
     if name_parts:
-        dog_data['dog_name'] = ' '.join(name_parts[:3])  # Limit to first 3 words
+        dog_data['dog_name'] = ' '.join(name_parts)
     
     return dog_data if dog_data['dog_name'] else None
 
@@ -141,6 +143,8 @@ def parse_page_layout_aware(page, track: str, race_num: int, distance: Optional[
             
             # Look for dog entry lines: should have format "X. NNNNDogName Nd 0.0kg N Trainer ..."
             # This pattern is more specific: box number, then form numbers (may include 'x')+dog name starting with letter
+            # Form numbers are typically 4-5 characters (e.g., "13582", "8x846", "48x48")
+            # followed immediately by a capital letter starting the dog's name
             box_match = re.match(r'\s*(\d+)\.\s+([\dx]{4,5}[A-Z])', line)
             if box_match:
                 box_num = int(box_match.group(1))
@@ -152,7 +156,9 @@ def parse_page_layout_aware(page, track: str, race_num: int, distance: Optional[
                     rest_of_line = line[box_match.end(1)+1:].strip()
                     
                     # Extract dog name (first sequence of words after the form numbers)
-                    # Pattern: "13582Doongalla Pedro" or "8x846Archie Trick" -> "Doongalla Pedro" or "Archie Trick"
+                    # Pattern matches format: "13582Doongalla Pedro 2d" or "8x846Archie Trick 4d"
+                    # Captures: Dog name starting with capital letter, may include apostrophes/hyphens/spaces
+                    # Stops at: age/sex indicator (e.g., "2d", "3b") or weight (e.g., "0.0kg")
                     dog_name_match = re.match(r'^[\dx]+([A-Z][A-Za-z\'\s\-]+?)(?:\s+\d[a-z]|\s+\d\.\d)', rest_of_line)
                     if dog_name_match:
                         dog_name = dog_name_match.group(1).strip()
