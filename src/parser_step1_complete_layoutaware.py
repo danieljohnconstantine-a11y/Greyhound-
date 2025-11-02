@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 # Regex patterns for parsing
 RACE_HEADER_PATTERN = re.compile(r"Race\s+No?\s+(\d+)", re.IGNORECASE)
+# Alternative pattern for "Broken Hill Race 6" or "Track Name Race X"
+ALT_RACE_PATTERN = re.compile(r"(?:Broken\s+Hill|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+Race\s+(\d+)", re.IGNORECASE)
 DOG_NAME_PATTERN = re.compile(r"^([A-Z][A-Za-z'\s\-]+)$")
 DISTANCE_PATTERN = re.compile(r"(\d+)m")
 PRIZE_PATTERN = re.compile(r"\$([0-9,]+)")
@@ -35,14 +37,44 @@ def extract_track_from_filename(filename: str) -> Optional[str]:
     return None
 
 
+def extract_track_from_content(text: str) -> Optional[str]:
+    """Extract track name from PDF content (e.g., 'Broken Hill' -> 'BRHG')"""
+    # Check for known track names
+    track_mappings = {
+        'broken hill': 'BRHG',
+        'capalaba': 'CAPA',
+        'darwin': 'DRWN',
+        'mandurah': 'MAND',
+        'lakeside': 'QLAG',
+        'straight': 'QSTR',
+    }
+    
+    text_lower = text.lower()
+    for name, code in track_mappings.items():
+        if name in text_lower:
+            return code
+    
+    return None
+
+
 def extract_race_number(text: str) -> Optional[int]:
     """Extract race number from text"""
+    # Try standard pattern first
     match = RACE_HEADER_PATTERN.search(text)
     if match:
         try:
             return int(match.group(1))
         except ValueError:
             pass
+    
+    # Try alternative pattern (e.g., "Broken Hill Race 6")
+    match = ALT_RACE_PATTERN.search(text)
+    if match:
+        try:
+            return int(match.group(1))
+        except ValueError:
+            pass
+    
     return None
 
 
@@ -146,6 +178,14 @@ def parse_page_layout_aware(page, track: str, race_num: int, distance: Optional[
             # Form numbers are typically 4-5 characters (e.g., "13582", "8x846", "48x48")
             # followed immediately by a capital letter starting the dog's name
             box_match = re.match(r'\s*(\d+)\.\s+([\dx]{4,5}[A-Z])', line)
+            
+            # Alternative pattern for Broken Hill format: "DogName21.37" (name + time)
+            # Look for a capitalized word followed by a time, and ensure trainer name follows
+            alt_match = None
+            if not box_match:
+                # Pattern: Dog name (1-3 words) + time (XX.XX) + trainer name (capitalized)
+                alt_match = re.match(r'\s*([A-Z][A-Za-z\']+(?:\s+[A-Z][a-z]+){0,2})(\d+\.\d{2})\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+', line)
+            
             if box_match:
                 box_num = int(box_match.group(1))
                 
@@ -195,6 +235,41 @@ def parse_page_layout_aware(page, track: str, race_num: int, distance: Optional[
                             'Comment': None,
                             'RaceTime': None
                         })
+            
+            # Handle alternative format (e.g., Broken Hill: "DogName21.37 TrainerName")
+            elif alt_match:
+                dog_name = alt_match.group(1).strip()
+                race_time = alt_match.group(2)
+                rest = alt_match.group(3).strip()
+                
+                # Extract trainer (first capitalized words)
+                trainer = None
+                trainer_match = re.match(r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)', rest)
+                if trainer_match:
+                    trainer = trainer_match.group(1)
+                
+                # Extract margins (format: XX: N-N-N)
+                margins = None
+                margins_match = re.search(r'(\d+):\s+(\d+-\d+-\d+)', rest)
+                if margins_match:
+                    margins = margins_match.group(2)
+                
+                # Assign sequential box number based on order
+                box_num = len(rows) % 10 + 1
+                
+                rows.append({
+                    'Track': track,
+                    'RaceNo': race_num,
+                    'Distance': distance,
+                    'Box': box_num,
+                    'DogName': dog_name,
+                    'Trainer': trainer,
+                    'PrizeMoney': None,
+                    'Odds': None,
+                    'Margins': margins,
+                    'Comment': None,
+                    'RaceTime': race_time
+                })
         
     except Exception as e:
         logger.error(f"Error parsing page: {e}")
@@ -230,6 +305,15 @@ def parse_pdf_file(filepath: str) -> pd.DataFrame:
             current_race = None
             current_distance = None
             prev_race = None
+            
+            # Try to extract track from first page content if not from filename
+            if track == "UNKNOWN" and len(pdf.pages) > 0:
+                first_page_text = pdf.pages[0].extract_text()
+                if first_page_text:
+                    track_from_content = extract_track_from_content(first_page_text)
+                    if track_from_content:
+                        track = track_from_content
+                        logger.info(f"  Extracted track '{track}' from PDF content")
             
             for page_num, page in enumerate(pdf.pages, 1):
                 # Extract text to find race headers
