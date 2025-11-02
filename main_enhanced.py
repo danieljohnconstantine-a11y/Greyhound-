@@ -44,7 +44,7 @@ def setup_logging(output_dir: str) -> logging.Logger:
 def export_reports(df: pd.DataFrame, output_dir: str) -> tuple:
     """Export DataFrame to both CSV and Excel with timestamp"""
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    base_name = f"greyhound_analysis_full_{timestamp}"
+    base_name = f"greyhound_full_analysis_{timestamp}"
     
     csv_path = os.path.join(output_dir, f"{base_name}.csv")
     excel_path = os.path.join(output_dir, f"{base_name}.xlsx")

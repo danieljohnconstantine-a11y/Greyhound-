@@ -12,6 +12,9 @@ import pdfplumber
 import pandas as pd
 from pathlib import Path
 
+# Import detailed extractor
+from detailed_extractor import enrich_record_with_details
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -314,6 +317,8 @@ def parse_pdf_file(filepath: str) -> pd.DataFrame:
                             current_race_date, current_race_class, source_pdf
                         )
                         if dog_record:
+                            # Enrich with detailed section data
+                            dog_record = enrich_record_with_details(dog_record, lines)
                             all_rows.append(dog_record)
     
     except Exception as e:
