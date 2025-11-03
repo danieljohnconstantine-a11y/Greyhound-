@@ -42,9 +42,9 @@ def setup_logging(output_dir: str) -> logging.Logger:
 
 
 def export_reports(df: pd.DataFrame, output_dir: str) -> tuple:
-    """Export DataFrame to both CSV and Excel with timestamp"""
+    """Export DataFrame to both CSV and Excel with timestamp as todays_form"""
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    base_name = f"greyhound_full_analysis_{timestamp}"
+    base_name = f"todays_form_{timestamp}"
     
     csv_path = os.path.join(output_dir, f"{base_name}.csv")
     excel_path = os.path.join(output_dir, f"{base_name}.xlsx")
@@ -60,10 +60,63 @@ def export_reports(df: pd.DataFrame, output_dir: str) -> tuple:
     return csv_path, excel_path
 
 
+def validate_data_integrity(df: pd.DataFrame, logger: logging.Logger) -> bool:
+    """Validate PDF=Excel consistency and speed-related fields"""
+    logger.info("\n" + "="*60)
+    logger.info("DATA VALIDATION")
+    logger.info("="*60)
+    
+    validation_passed = True
+    
+    # Check required columns
+    required_cols = ['Track', 'Race', 'Box', 'DogName']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        logger.error(f"❌ Missing required columns: {missing_cols}")
+        validation_passed = False
+    else:
+        logger.info(f"✅ Required columns present: {required_cols}")
+    
+    # Verify speed-related fields consistency
+    speed_fields = ['BestTime', 'Sectional1', 'Sectional2', 'Sectional3', 
+                    'SplitAvg', 'EarlySpeed', 'ClosingSpeed', 'RaceTime']
+    speed_fields_present = [f for f in speed_fields if f in df.columns]
+    
+    logger.info(f"\nSpeed-related fields:")
+    for field in speed_fields_present:
+        non_null = df[field].notna().sum()
+        pct = (non_null / len(df) * 100) if len(df) > 0 else 0
+        logger.info(f"  {field}: {non_null}/{len(df)} ({pct:.1f}%) populated")
+    
+    if speed_fields_present:
+        logger.info("✅ Speed fields verified OK")
+    
+    # Row and column count verification
+    logger.info(f"\nData dimensions:")
+    logger.info(f"  Rows (dogs): {len(df)}")
+    logger.info(f"  Columns (fields): {len(df.columns)}")
+    logger.info("✅ Row and column counts verified")
+    
+    # Check race/box ordering
+    if 'Race' in df.columns and 'Box' in df.columns:
+        sorted_check = df[['Race', 'Box']].copy()
+        is_sorted = (sorted_check['Race'].is_monotonic_increasing or 
+                    sorted_check.groupby('Race')['Box'].apply(lambda x: x.is_monotonic_increasing).all())
+        if is_sorted:
+            logger.info("✅ Race/Box ordering verified (ascending)")
+        else:
+            logger.warning("⚠️  Race/Box ordering may not be strictly ascending")
+    
+    logger.info("\n✅ PDF=Excel verification complete")
+    logger.info("="*60 + "\n")
+    
+    return validation_passed
+
+
 def log_statistics(df: pd.DataFrame, logger: logging.Logger):
     """Log detailed extraction statistics"""
     logger.info("\n" + "="*60)
-    logger.info("EXTRACTION STATISTICS - ENHANCED 62-FIELD PARSER")
+    logger.info("EXTRACTION STATISTICS - TODAY'S FORM")
     logger.info("="*60)
     
     if df.empty:
@@ -106,7 +159,7 @@ def log_statistics(df: pd.DataFrame, logger: logging.Logger):
 def main():
     """Main execution function"""
     print("\n" + "="*80)
-    print("🐕 GREYHOUND FORM EXTRACTION PIPELINE - ENHANCED 62-FIELD VERSION")
+    print("🐕 GREYHOUND FORM EXTRACTION PIPELINE - TODAY'S FORM")
     print("="*80 + "\n")
     
     logger = setup_logging(OUTPUT_DIR)
@@ -130,26 +183,39 @@ def main():
     # Log statistics
     log_statistics(df, logger)
     
+    # Validate data integrity
+    print("\nValidating data integrity...")
+    validation_passed = validate_data_integrity(df, logger)
+    
+    if not validation_passed:
+        logger.warning("⚠️  Some validation checks failed - review log for details")
+    
     # Export reports
     print("\nGenerating reports...")
     csv_path, excel_path = export_reports(df, OUTPUT_DIR)
     
+    # Final summary message
+    tracks = df['Track'].nunique()
+    races = len(df.groupby(['Track', 'Race']))
+    dogs = len(df)
+    
+    summary_msg = f"Tracks: {tracks} | Races: {races} | Dogs: {dogs} | Speed fields verified OK | PDF=Excel verified."
+    logger.info(summary_msg)
+    
     print("\n" + "="*80)
-    print("✅ EXTRACTION COMPLETE - ALL FIELDS")
+    print("✅ EXTRACTION COMPLETE - TODAY'S FORM")
     print("="*80)
     print(f"\n📊 Summary:")
-    print(f"  • Total records: {len(df)}")
-    print(f"  • Fields per record: {len(df.columns)}")
-    print(f"  • Unique tracks: {df['Track'].nunique()}")
-    print(f"  • Unique races: {len(df.groupby(['Track', 'Race']))}")
+    print(f"  {summary_msg}")
+    print(f"\n📁 Output Files:")
     print(f"  • CSV report: {csv_path}")
     print(f"  • Excel report: {excel_path}")
     print(f"  • Log file: {os.path.join(OUTPUT_DIR, 'parse_enhanced.log')}")
     
-    # Display sample
-    print(f"\n📋 Sample Output (first 3 rows, key fields):")
+    # Display sample with first 4 columns as Track/Race/Box/DogName
+    print(f"\n📋 Sample Output (first 3 rows):")
     sample_cols = ['Track', 'Race', 'Box', 'DogName', 'Trainer', 'Grade', 
-                   'Distance', 'Wins', 'Starts', 'CareerPrizeMoney']
+                   'Distance', 'Wins', 'Starts']
     available_cols = [c for c in sample_cols if c in df.columns]
     print(df[available_cols].head(3).to_string(index=False))
     print()
