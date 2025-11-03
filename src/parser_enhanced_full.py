@@ -118,6 +118,38 @@ def extract_race_class(text: str) -> Optional[str]:
     return None
 
 
+def extract_race_time(text: str) -> Optional[str]:
+    """Extract race time (e.g., 'Race Time 0:30.41' or '0:30.41')"""
+    match = re.search(r'Race Time\s+([\d:\.]+)', text, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    # Try to find just the time format
+    match = re.search(r'(\d+:\d+\.\d+)', text)
+    if match:
+        return match.group(1)
+    return None
+
+
+def extract_sectional_time(text: str) -> Optional[str]:
+    """Extract sectional time (e.g., 'Sec Time 4.39' or '4.39')"""
+    match = re.search(r'Sec Time\s+([\d\.]+)', text, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return None
+
+
+def extract_split_times(text: str) -> tuple:
+    """Extract split/sectional times from race history"""
+    # Try to find multiple sectional times
+    sectionals = re.findall(r'Sec(?:tional)?\s*(?:Time)?\s*([\d\.]+)', text, re.IGNORECASE)
+    
+    sectional1 = sectionals[0] if len(sectionals) > 0 else None
+    sectional2 = sectionals[1] if len(sectionals) > 1 else None
+    sectional3 = sectionals[2] if len(sectionals) > 2 else None
+    
+    return sectional1, sectional2, sectional3
+
+
 def parse_dog_summary_line(line: str, track: str, race: int, distance: Optional[int], 
                            race_date: Optional[str], race_class: Optional[str],
                            source_pdf: str) -> Optional[Dict]:
