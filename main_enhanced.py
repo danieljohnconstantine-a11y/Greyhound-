@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Enhanced main controller for greyhound form extraction pipeline.
-Extracts all 62 fields and generates CSV/XLSX with exact column structure.
+Extracts all 62 fields with proper race context tracking and generates CSV/XLSX with exact column structure.
 """
 
 import os
@@ -13,7 +13,7 @@ import pandas as pd
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from parser_enhanced_full import parse_directory, COLUMNS
+from integrated_parser import parse_directory, validate_output, COLUMNS
 
 # Directory configuration
 DATA_DIR = "data"
