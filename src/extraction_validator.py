@@ -258,7 +258,7 @@ def enforce_dtypes_and_sort(df: pd.DataFrame) -> pd.DataFrame:
     
     if sort_cols:
         df = df.sort_values(by=sort_cols).reset_index(drop=True)
-        logger.info(f"✅ Sorted by: {' → '.join(sort_cols)}")
+        logger.info(f"[OK] Sorted by: {' → '.join(sort_cols)}")
     
     return df
 
@@ -313,7 +313,7 @@ def validate_race_counts(df: pd.DataFrame, pdf_files: List[str]) -> bool:
                 logger.error(f"❌ Race count mismatch for {track_name}: expected {expected_count}, found {unique_races}")
                 all_passed = False
             else:
-                logger.info(f"✅ Race count matches expected")
+                logger.info(f"[OK] Race count matches expected")
             
             # Check if races are contiguous
             expected_races = list(range(1, expected_count + 1))
@@ -321,7 +321,7 @@ def validate_race_counts(df: pd.DataFrame, pdf_files: List[str]) -> bool:
                 logger.error(f"❌ Races not contiguous: expected {expected_races}, found {race_list}")
                 all_passed = False
             else:
-                logger.info(f"✅ Races are contiguous and sequential")
+                logger.info(f"[OK] Races are contiguous and sequential")
     
     return all_passed
 
@@ -358,10 +358,10 @@ def validate_box_sequences(df: pd.DataFrame) -> bool:
             logger.error(f"❌ {track} Race {race}: Boxes not sequential (found: {boxes}, expected: {expected_boxes[:len(boxes)]})")
             all_passed = False
         else:
-            logger.debug(f"✅ {track} Race {race}: Boxes {boxes[0]}-{boxes[-1]} OK")
+            logger.debug(f"[OK] {track} Race {race}: Boxes {boxes[0]}-{boxes[-1]} OK")
     
     if all_passed:
-        logger.info("✅ All box sequences valid")
+        logger.info("[OK] All box sequences valid")
     
     return all_passed
 
@@ -387,7 +387,7 @@ def validate_coverage_thresholds(df: pd.DataFrame) -> bool:
         total = len(df)
         coverage = (non_null / total * 100) if total > 0 else 0
         
-        status = "✅" if coverage >= threshold else "⚠️ "
+        status = "[OK]" if coverage >= threshold else "⚠️ "
         logger.info(f"{status} {field}: {non_null}/{total} ({coverage:.1f}%) [threshold: {threshold}%]")
         
         if coverage < threshold:
@@ -420,7 +420,7 @@ def log_per_track_preview(df: pd.DataFrame) -> None:
     for track in sorted(df['Track'].unique()):
         track_df = df[df['Track'] == track]
         
-        logger.info(f"\n📊 Track: {track}")
+        logger.info(f"\n[LOG] Track: {track}")
         logger.info("-" * 60)
         
         # Get first race
@@ -469,7 +469,7 @@ def validate_pdf_excel_consistency(df: pd.DataFrame, csv_path: str, excel_path: 
         logger.error(f"   Found: {actual_first_4}")
         all_passed = False
     else:
-        logger.info(f"✅ First 4 columns exact: {expected_first_4}")
+        logger.info(f"[OK] First 4 columns exact: {expected_first_4}")
     
     # Check uniqueness in DataFrame
     if all(col in df.columns for col in ['Track', 'Race', 'Box']):
@@ -478,7 +478,7 @@ def validate_pdf_excel_consistency(df: pd.DataFrame, csv_path: str, excel_path: 
             logger.error(f"❌ DataFrame has {dupes_df.sum()} duplicate (Track, Race, Box) entries")
             all_passed = False
         else:
-            logger.info(f"✅ DataFrame (Track, Race, Box) uniqueness confirmed")
+            logger.info(f"[OK] DataFrame (Track, Race, Box) uniqueness confirmed")
     
     # Load and check CSV
     try:
@@ -488,14 +488,14 @@ def validate_pdf_excel_consistency(df: pd.DataFrame, csv_path: str, excel_path: 
             logger.error(f"❌ CSV has {dupes_csv.sum()} duplicate (Track, Race, Box) entries")
             all_passed = False
         else:
-            logger.info(f"✅ CSV (Track, Race, Box) uniqueness confirmed")
+            logger.info(f"[OK] CSV (Track, Race, Box) uniqueness confirmed")
         
         # Compare dimensions
         if len(csv_df) != len(df):
             logger.error(f"❌ CSV row count ({len(csv_df)}) != DataFrame ({len(df)})")
             all_passed = False
         else:
-            logger.info(f"✅ CSV row count matches DataFrame: {len(df)}")
+            logger.info(f"[OK] CSV row count matches DataFrame: {len(df)}")
         
     except Exception as e:
         logger.error(f"❌ Error loading CSV: {e}")
@@ -509,14 +509,14 @@ def validate_pdf_excel_consistency(df: pd.DataFrame, csv_path: str, excel_path: 
             logger.error(f"❌ Excel has {dupes_excel.sum()} duplicate (Track, Race, Box) entries")
             all_passed = False
         else:
-            logger.info(f"✅ Excel (Track, Race, Box) uniqueness confirmed")
+            logger.info(f"[OK] Excel (Track, Race, Box) uniqueness confirmed")
         
         # Compare dimensions
         if len(excel_df) != len(df):
             logger.error(f"❌ Excel row count ({len(excel_df)}) != DataFrame ({len(df)})")
             all_passed = False
         else:
-            logger.info(f"✅ Excel row count matches DataFrame: {len(df)}")
+            logger.info(f"[OK] Excel row count matches DataFrame: {len(df)}")
         
     except Exception as e:
         logger.error(f"❌ Error loading Excel: {e}")
@@ -535,7 +535,7 @@ def validate_pdf_excel_consistency(df: pd.DataFrame, csv_path: str, excel_path: 
         logger.info(f"\n{field} sample (first 5 non-null): {non_null_sample}")
     
     if all_passed:
-        logger.info("\n✅ PDF=Excel consistency validated")
+        logger.info("\n[OK] PDF=Excel consistency validated")
     
     return all_passed
 
@@ -577,7 +577,7 @@ def run_comprehensive_validation(df: pd.DataFrame, pdf_files: List[str],
     logger.info("="*70)
     
     for check_name, passed in results:
-        status = "✅ PASS" if passed else "❌ FAIL"
+        status = "[OK] PASS" if passed else "❌ FAIL"
         logger.info(f"{status}: {check_name}")
     
     all_passed = all(passed for _, passed in results)

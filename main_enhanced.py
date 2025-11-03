@@ -13,7 +13,8 @@ import pandas as pd
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from integrated_parser import parse_directory, validate_output, COLUMNS
+from comprehensive_parser import ComprehensiveParser
+from enhanced_validation import EnhancedValidator
 
 # Directory configuration
 DATA_DIR = "data"
@@ -51,11 +52,11 @@ def export_reports(df: pd.DataFrame, output_dir: str) -> tuple:
     
     # Export CSV
     df.to_csv(csv_path, index=False)
-    print(f"✅ CSV saved: {csv_path}")
+    print(f"[OK] CSV saved: {csv_path}")
     
     # Export Excel
     df.to_excel(excel_path, index=False, engine='openpyxl')
-    print(f"✅ Excel saved: {excel_path}")
+    print(f"[OK] Excel saved: {excel_path}")
     
     return csv_path, excel_path
 
@@ -72,10 +73,10 @@ def validate_data_integrity(df: pd.DataFrame, logger: logging.Logger) -> bool:
     required_cols = ['Track', 'Race', 'Box', 'DogName']
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
-        logger.error(f"❌ Missing required columns: {missing_cols}")
+        logger.error(f"[FAIL] Missing required columns: {missing_cols}")
         validation_passed = False
     else:
-        logger.info(f"✅ Required columns present: {required_cols}")
+        logger.info(f"[OK] Required columns present: {required_cols}")
     
     # Verify speed-related fields consistency
     speed_fields = ['BestTime', 'Sectional1', 'Sectional2', 'Sectional3', 
@@ -89,13 +90,13 @@ def validate_data_integrity(df: pd.DataFrame, logger: logging.Logger) -> bool:
         logger.info(f"  {field}: {non_null}/{len(df)} ({pct:.1f}%) populated")
     
     if speed_fields_present:
-        logger.info("✅ Speed fields verified OK")
+        logger.info("[OK] Speed fields verified OK")
     
     # Row and column count verification
     logger.info(f"\nData dimensions:")
     logger.info(f"  Rows (dogs): {len(df)}")
     logger.info(f"  Columns (fields): {len(df.columns)}")
-    logger.info("✅ Row and column counts verified")
+    logger.info("[OK] Row and column counts verified")
     
     # Check race/box ordering
     if 'Race' in df.columns and 'Box' in df.columns:
@@ -103,11 +104,11 @@ def validate_data_integrity(df: pd.DataFrame, logger: logging.Logger) -> bool:
         is_sorted = (sorted_check['Race'].is_monotonic_increasing or 
                     sorted_check.groupby('Race')['Box'].apply(lambda x: x.is_monotonic_increasing).all())
         if is_sorted:
-            logger.info("✅ Race/Box ordering verified (ascending)")
+            logger.info("[OK] Race/Box ordering verified (ascending)")
         else:
-            logger.warning("⚠️  Race/Box ordering may not be strictly ascending")
+            logger.warning("[WARN] Race/Box ordering may not be strictly ascending")
     
-    logger.info("\n✅ PDF=Excel verification complete")
+    logger.info("\n[OK] PDF=Excel verification complete")
     logger.info("="*60 + "\n")
     
     return validation_passed
@@ -159,7 +160,7 @@ def log_statistics(df: pd.DataFrame, logger: logging.Logger):
 def main():
     """Main execution function"""
     print("\n" + "="*80)
-    print("🐕 GREYHOUND FORM EXTRACTION PIPELINE - TODAY'S FORM")
+    print("GREYHOUND FORM EXTRACTION PIPELINE - TODAY'S FORM")
     print("="*80 + "\n")
     
     logger = setup_logging(OUTPUT_DIR)
@@ -169,26 +170,41 @@ def main():
     
     logger.info(f"Data directory: {os.path.abspath(DATA_DIR)}")
     logger.info(f"Output directory: {os.path.abspath(OUTPUT_DIR)}")
-    logger.info(f"Extracting {len(COLUMNS)} fields per dog")
+    logger.info(f"Extracting 62 fields per dog")
     
-    # Parse all PDFs
+    # Parse all PDFs using ComprehensiveParser
     print(f"Processing PDFs from: {DATA_DIR}\n")
-    df = parse_directory(DATA_DIR)
+    parser = ComprehensiveParser()
+    df = parser.parse_directory(DATA_DIR)
     
     if df.empty:
-        print("\n⚠️  No data extracted from PDFs.")
+        print("\n[WARN] No data extracted from PDFs.")
         print(f"Please add PDF files to {os.path.abspath(DATA_DIR)} and try again.\n")
         return
+    
+    # Enforce dtypes before sorting
+    if 'Race' in df.columns:
+        df['Race'] = pd.to_numeric(df['Race'], errors='coerce').fillna(0).astype(int)
+    if 'Box' in df.columns:
+        df['Box'] = pd.to_numeric(df['Box'], errors='coerce').fillna(0).astype(int)
+    
+    # Sort strictly: Track -> Race -> Box
+    if all(col in df.columns for col in ['Track', 'Race', 'Box']):
+        df = df.sort_values(by=['Track', 'Race', 'Box'], ascending=[True, True, True])
+        df = df.reset_index(drop=True)
+        logger.info("[OK] Data sorted by Track -> Race -> Box")
     
     # Log statistics
     log_statistics(df, logger)
     
-    # Validate data integrity
+    # Validate data integrity using EnhancedValidator
     print("\nValidating data integrity...")
-    validation_passed = validate_data_integrity(df, logger)
+    validator = EnhancedValidator()
+    validation_passed = validator.validate_dataframe(df, logger)
+    validate_data_integrity(df, logger)
     
     if not validation_passed:
-        logger.warning("⚠️  Some validation checks failed - review log for details")
+        logger.warning("[WARN] Some validation checks failed - review log for details")
     
     # Export reports
     print("\nGenerating reports...")
@@ -203,17 +219,17 @@ def main():
     logger.info(summary_msg)
     
     print("\n" + "="*80)
-    print("✅ EXTRACTION COMPLETE - TODAY'S FORM")
+    print("[OK] EXTRACTION COMPLETE - TODAY'S FORM")
     print("="*80)
-    print(f"\n📊 Summary:")
+    print(f"\n[INFO] Summary:")
     print(f"  {summary_msg}")
-    print(f"\n📁 Output Files:")
-    print(f"  • CSV report: {csv_path}")
-    print(f"  • Excel report: {excel_path}")
-    print(f"  • Log file: {os.path.join(OUTPUT_DIR, 'parse_enhanced.log')}")
+    print(f"\n[FILE] Output Files:")
+    print(f"  - CSV report: {csv_path}")
+    print(f"  - Excel report: {excel_path}")
+    print(f"  - Log file: {os.path.join(OUTPUT_DIR, 'parse_enhanced.log')}")
     
     # Display sample with first 4 columns as Track/Race/Box/DogName
-    print(f"\n📋 Sample Output (first 3 rows):")
+    print(f"\n[LOG] Sample Output (first 3 rows):")
     sample_cols = ['Track', 'Race', 'Box', 'DogName', 'Trainer', 'Grade', 
                    'Distance', 'Wins', 'Starts']
     available_cols = [c for c in sample_cols if c in df.columns]

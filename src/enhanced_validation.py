@@ -65,7 +65,7 @@ def validate_race_counts(df: pd.DataFrame, source_file: str) -> Tuple[bool, List
             )
             return False, errors
         
-        logger.info(f"✅ {source_file}: Race count validated ({actual_count} races: {expected_range[0]}-{expected_range[1]})")
+        logger.info(f"[OK] {source_file}: Race count validated ({actual_count} races: {expected_range[0]}-{expected_range[1]})")
     
     return True, errors
 
@@ -102,7 +102,7 @@ def validate_race_box_ordering(df: pd.DataFrame) -> Tuple[bool, List[str]]:
                         break
     
     if not errors:
-        logger.info("✅ Race/Box ordering validated: all races sequential, boxes strictly ascending")
+        logger.info("[OK] Race/Box ordering validated: all races sequential, boxes strictly ascending")
     
     return len(errors) == 0, errors
 
@@ -127,7 +127,7 @@ def validate_coverage_thresholds(df: pd.DataFrame) -> Tuple[bool, List[str]]:
                     f"⚠️  {field}: {coverage*100:.1f}% populated (threshold: {threshold*100:.0f}%) - {non_null}/{total_rows} rows"
                 )
             else:
-                logger.info(f"✅ {field}: {coverage*100:.1f}% populated ({non_null}/{total_rows} rows)")
+                logger.info(f"[OK] {field}: {coverage*100:.1f}% populated ({non_null}/{total_rows} rows)")
     
     return len(warnings) == 0, warnings
 
@@ -151,7 +151,7 @@ def validate_uniqueness(df: pd.DataFrame) -> Tuple[bool, List[str]]:
         for idx, row in duplicates.head(10).iterrows():
             errors.append(f"   - Track={row['Track']}, Race={row['Race']}, Box={row['Box']}, Dog={row['DogName']}")
     else:
-        logger.info("✅ No duplicate (Track, Race, Box) combinations found")
+        logger.info("[OK] No duplicate (Track, Race, Box) combinations found")
     
     return len(errors) == 0, errors
 
@@ -249,7 +249,7 @@ def validate_pdf_excel_consistency(df: pd.DataFrame, csv_path: str, xlsx_path: s
                     errors.append(f"❌ {col}: DataFrame has {df_non_null} non-null, XLSX has {xlsx_non_null}")
         
         if not errors:
-            logger.info("✅ PDF=Excel consistency validated: CSV and XLSX match DataFrame")
+            logger.info("[OK] PDF=Excel consistency validated: CSV and XLSX match DataFrame")
     
     except Exception as e:
         errors.append(f"❌ Failed to validate file consistency: {e}")
@@ -331,7 +331,7 @@ def run_comprehensive_validation(df: pd.DataFrame, source_files: List[str],
     # Summary
     logger.info("\n" + "="*100)
     if all_valid:
-        logger.info("✅ ALL VALIDATIONS PASSED")
+        logger.info("[OK] ALL VALIDATIONS PASSED")
     else:
         logger.error("❌ VALIDATION FAILURES DETECTED")
         logger.error(f"Total issues: {len([m for m in all_messages if '❌' in m])}")

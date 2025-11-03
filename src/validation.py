@@ -51,7 +51,7 @@ def validate_race_counts(df: pd.DataFrame, source_files: List[str]) -> bool:
                     logger.error(f"  ❌ FAIL: Expected races {expected_set}, found {actual_set}")
                     validation_passed = False
                 else:
-                    logger.info(f"  ✅ PASS: All {expected_count} races present and sequential")
+                    logger.info(f"  [OK] PASS: All {expected_count} races present and sequential")
     
     return validation_passed
 
@@ -78,7 +78,7 @@ def validate_track_ordering(df: pd.DataFrame) -> bool:
                 logger.error(f"  ❌ FAIL: Races not contiguous. Expected {expected_races}, got {races}")
                 validation_passed = False
             else:
-                logger.info(f"  ✅ Races are contiguous: {races[0]}..{races[-1]}")
+                logger.info(f"  [OK] Races are contiguous: {races[0]}..{races[-1]}")
         
         # Check box ordering per race
         for race_num in races:
@@ -93,7 +93,7 @@ def validate_track_ordering(df: pd.DataFrame) -> bool:
                 elif boxes_int[0] != 1:
                     logger.warning(f"  ⚠️ WARNING: Race {race_num} boxes don't start at 1: {boxes_int}")
                 else:
-                    logger.info(f"  ✅ Race {race_num} boxes ascending: {boxes_int}")
+                    logger.info(f"  [OK] Race {race_num} boxes ascending: {boxes_int}")
     
     return validation_passed
 
@@ -121,7 +121,7 @@ def validate_coverage_thresholds(df: pd.DataFrame) -> bool:
             non_null = df[field].notna().sum()
             actual_pct = (non_null / total_rows * 100) if total_rows > 0 else 0
             
-            status = "✅ PASS" if actual_pct >= threshold_pct else "⚠️ WARN"
+            status = "[OK] PASS" if actual_pct >= threshold_pct else "⚠️ WARN"
             logger.info(f"  {field}: {non_null}/{total_rows} ({actual_pct:.1f}%) - Threshold: {threshold_pct}% - {status}")
             
             if actual_pct < threshold_pct:
@@ -190,7 +190,7 @@ def validate_pdf_excel_consistency(df: pd.DataFrame, csv_path: str, excel_path: 
                 csv_vals = csv_df[col].fillna('').astype(str).tolist()
                 excel_vals = excel_df[col].fillna('').astype(str).tolist()
                 if csv_vals == excel_vals:
-                    logger.info(f"  ✅ {col}: CSV and Excel match ({len(csv_vals)} rows)")
+                    logger.info(f"  [OK] {col}: CSV and Excel match ({len(csv_vals)} rows)")
                 else:
                     logger.error(f"  ❌ FAIL: {col} values differ between CSV and Excel")
                     validation_passed = False
@@ -206,13 +206,13 @@ def validate_pdf_excel_consistency(df: pd.DataFrame, csv_path: str, excel_path: 
             logger.error(f"  ❌ FAIL: CSV has {csv_duplicates} duplicate (Track, Race, Box) combinations")
             validation_passed = False
         else:
-            logger.info(f"  ✅ CSV: No duplicates in (Track, Race, Box)")
+            logger.info(f"  [OK] CSV: No duplicates in (Track, Race, Box)")
         
         if excel_duplicates > 0:
             logger.error(f"  ❌ FAIL: Excel has {excel_duplicates} duplicate (Track, Race, Box) combinations")
             validation_passed = False
         else:
-            logger.info(f"  ✅ Excel: No duplicates in (Track, Race, Box)")
+            logger.info(f"  [OK] Excel: No duplicates in (Track, Race, Box)")
         
         # 3. Verify time/sectional field consistency
         time_fields = ['BestTime', 'Sectional1', 'Sectional2', 'Sectional3', 'SplitAvg', 'SpeedIndex']
@@ -224,7 +224,7 @@ def validate_pdf_excel_consistency(df: pd.DataFrame, csv_path: str, excel_path: 
                 excel_count = excel_df[field].notna().sum()
                 
                 if csv_count == excel_count:
-                    logger.info(f"  ✅ {field}: {csv_count} non-null values in both CSV and Excel")
+                    logger.info(f"  [OK] {field}: {csv_count} non-null values in both CSV and Excel")
                     
                     # Sample a few values
                     csv_sample = csv_df[field].dropna().head(3).tolist()
@@ -235,7 +235,7 @@ def validate_pdf_excel_consistency(df: pd.DataFrame, csv_path: str, excel_path: 
                     logger.error(f"  ❌ FAIL: {field} has {csv_count} values in CSV but {excel_count} in Excel")
                     validation_passed = False
         
-        logger.info(f"\nPDF=Excel validation: {'✅ PASSED' if validation_passed else '❌ FAILED'}")
+        logger.info(f"\nPDF=Excel validation: {'[OK] PASSED' if validation_passed else '❌ FAILED'}")
         
     except Exception as e:
         logger.error(f"❌ Error reading output files for validation: {e}")
@@ -257,7 +257,7 @@ def run_all_validations(df: pd.DataFrame, source_files: List[str], csv_path: str
     all_passed = all(results)
     
     logger.info("\n" + "="*60)
-    logger.info(f"OVERALL VALIDATION: {'✅ ALL PASSED' if all_passed else '❌ SOME CHECKS FAILED'}")
+    logger.info(f"OVERALL VALIDATION: {'[OK] ALL PASSED' if all_passed else '❌ SOME CHECKS FAILED'}")
     logger.info("="*60)
     
     return all_passed
