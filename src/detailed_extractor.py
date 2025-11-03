@@ -8,7 +8,10 @@ Also extracts speed metrics from race history.
 import re
 from typing import Dict, Optional, Tuple, List
 
-from .race_history_parser import extract_speed_metrics_from_history, extract_race_history_section
+try:
+    from .race_history_parser import extract_speed_metrics_from_history, extract_race_history_section
+except ImportError:
+    from race_history_parser import extract_speed_metrics_from_history, extract_race_history_section
 
 
 def extract_detailed_dog_info(lines: List[str], dog_name: str, box_num: int = None) -> Dict:
