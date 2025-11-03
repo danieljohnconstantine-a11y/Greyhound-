@@ -2,13 +2,16 @@
 """
 Detailed section extractor for greyhound forms.
 Extracts Sire, Dam, Owner, Color, and performance metrics from detailed dog sections.
+Also extracts speed metrics from race history.
 """
 
 import re
 from typing import Dict, Optional, Tuple, List
 
+from .race_history_parser import extract_speed_metrics_from_history, extract_race_history_section
 
-def extract_detailed_dog_info(lines: List[str], dog_name: str) -> Dict:
+
+def extract_detailed_dog_info(lines: List[str], dog_name: str, box_num: int = None) -> Dict:
     """
     Extract detailed information from the dog's detailed section.
     The detailed section appears after the summary line and contains:
@@ -54,6 +57,10 @@ def extract_detailed_dog_info(lines: List[str], dog_name: str) -> Dict:
         'AW_Record': None,
         'Turf_Record': None,
         'BestTime': None,
+        'SplitAvg': None,
+        'SpeedIndex': None,
+        'EarlySpeed': None,
+        'ClosingSpeed': None,
     }
     
     # Find the detailed section for this dog
@@ -168,6 +175,19 @@ def extract_detailed_dog_info(lines: List[str], dog_name: str) -> Dict:
                     details['Turf_Record'] = parts[12] if parts[12] not in ['-', ''] else None
                 break
     
+    # Extract speed metrics from race history
+    # Find all race history lines in the document
+    if box_num is not None:
+        race_history_text = extract_race_history_section(lines, dog_name, box_num)
+        if race_history_text:
+            speed_metrics = extract_speed_metrics_from_history(race_history_text)
+            # Merge speed metrics into details
+            details['BestTime'] = speed_metrics.get('BestTime')
+            details['SplitAvg'] = speed_metrics.get('SplitAvg')
+            details['SpeedIndex'] = speed_metrics.get('SpeedIndex')
+            details['EarlySpeed'] = speed_metrics.get('EarlySpeed')
+            details['ClosingSpeed'] = speed_metrics.get('ClosingSpeed')
+    
     return details
 
 
@@ -176,11 +196,12 @@ def enrich_record_with_details(record: Dict, lines: List[str]) -> Dict:
     Enrich a basic dog record with detailed information.
     """
     dog_name = record.get('DogName', '')
+    box_num = record.get('Box')
     if not dog_name:
         return record
     
-    # Extract detailed info
-    details = extract_detailed_dog_info(lines, dog_name)
+    # Extract detailed info (pass box number for race history extraction)
+    details = extract_detailed_dog_info(lines, dog_name, box_num)
     
     # Merge details into record
     for key, value in details.items():
