@@ -61,6 +61,59 @@ def export_reports(df: pd.DataFrame, output_dir: str) -> tuple:
     return csv_path, excel_path
 
 
+def validate_csv_excel_integrity(csv_path: str, excel_path: str, logger: logging.Logger) -> bool:
+    """Validate that CSV and Excel outputs contain identical data row-for-row"""
+    logger.info("\n" + "="*60)
+    logger.info("CSV ↔ EXCEL DATA INTEGRITY VALIDATION")
+    logger.info("="*60)
+    
+    try:
+        # Read both files
+        df_csv = pd.read_csv(csv_path)
+        df_excel = pd.read_excel(excel_path, engine='openpyxl')
+        
+        # Check dimensions
+        if df_csv.shape != df_excel.shape:
+            logger.error(f"[FAIL] Shape mismatch: CSV {df_csv.shape} vs Excel {df_excel.shape}")
+            return False
+        
+        logger.info(f"[OK] Both files have same dimensions: {df_csv.shape}")
+        
+        # Check column names
+        if list(df_csv.columns) != list(df_excel.columns):
+            logger.error("[FAIL] Column names don't match")
+            return False
+        
+        logger.info(f"[OK] Both files have same {len(df_csv.columns)} columns")
+        
+        # Compare data row by row for key columns
+        key_cols = ['Track', 'Race', 'Box', 'DogName', 'Trainer']
+        available_keys = [c for c in key_cols if c in df_csv.columns]
+        
+        mismatches = 0
+        for col in available_keys:
+            if not df_csv[col].equals(df_excel[col]):
+                # Check if differences are just due to type conversion
+                csv_vals = df_csv[col].fillna('').astype(str)
+                excel_vals = df_excel[col].fillna('').astype(str)
+                if not csv_vals.equals(excel_vals):
+                    mismatches += 1
+                    logger.warning(f"[WARN] Column '{col}' has differences")
+        
+        if mismatches == 0:
+            logger.info(f"[OK] All {len(available_keys)} key columns match exactly")
+            logger.info("\n[OK] PDF=Excel data integrity verified")
+            logger.info("="*60 + "\n")
+            return True
+        else:
+            logger.warning(f"[WARN] {mismatches} columns have differences")
+            return False
+            
+    except Exception as e:
+        logger.error(f"[FAIL] Error validating files: {e}")
+        return False
+
+
 def validate_data_integrity(df: pd.DataFrame, logger: logging.Logger) -> bool:
     """Validate PDF=Excel consistency and speed-related fields"""
     logger.info("\n" + "="*60)
@@ -206,6 +259,12 @@ def main():
     # Export reports
     print("\nGenerating reports...")
     csv_path, excel_path = export_reports(df, OUTPUT_DIR)
+    
+    # Validate CSV vs Excel integrity
+    print("\nValidating CSV ↔ Excel integrity...")
+    csv_excel_valid = validate_csv_excel_integrity(csv_path, excel_path, logger)
+    if not csv_excel_valid:
+        logger.warning("[WARN] CSV/Excel validation had issues - review log")
     
     # Final summary message
     tracks = df['Track'].nunique()

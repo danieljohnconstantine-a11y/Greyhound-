@@ -45,7 +45,12 @@ COLUMNS = [
 def extract_track_from_filename(filename: str) -> Optional[str]:
     """Extract track code from filename"""
     basename = os.path.basename(filename)
+    # Try pattern with underscore: TRACK_date.pdf
     match = re.match(r"^([A-Z]{3,5})_", basename)
+    if match:
+        return match.group(1)
+    # Try pattern without underscore: TRACKddmmform.pdf
+    match = re.match(r"^([A-Z]{3,5})\d", basename)
     if match:
         return match.group(1)
     return None
@@ -57,9 +62,12 @@ def extract_track_from_content(text: str) -> Optional[str]:
         'broken hill': 'BRHG',
         'capalaba': 'CAPA',
         'darwin': 'DRWN',
-        'mandurah': 'MAND',
-        'lakeside': 'QLAG',
+        'mandurah': 'MANDG',
+        'lakeside': 'QLAKG',
         'straight': 'QSTR',
+        'angle park': 'SALEG',
+        'wentworth park': 'WENTY',
+        'the gardens': 'GAWL',
     }
     text_lower = text.lower()
     for name, code in track_mappings.items():
