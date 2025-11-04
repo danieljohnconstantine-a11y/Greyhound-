@@ -31,10 +31,10 @@ def write_reports(df: pd.DataFrame, out_root: str, date_str: str):
 
     # probabilities
     probs = uniform_probabilities(df)
-    probs_path_today = os.path.join(today_dir, "probabilities.xlsx")
-    probs_path_latest = os.path.join(latest_dir, "probabilities.xlsx")
-    probs.to_excel(probs_path_today, index=False, engine='openpyxl')
-    probs.to_excel(probs_path_latest, index=False, engine='openpyxl')
+    probs_path_today = os.path.join(today_dir, "probabilities.csv")
+    probs_path_latest = os.path.join(latest_dir, "probabilities.csv")
+    probs.to_csv(probs_path_today, index=False)
+    probs.to_csv(probs_path_latest, index=False)
 
     # basic “top pick” summary (box 1 by default on uniform)
     # but show first race per track for quick glance
@@ -60,8 +60,8 @@ def main(out_forms: str, out_rns: str, out_reports: str, date_override: str | No
     parsed = parse_folder(out_forms)
     print(f"[run] parsed_rows={len(parsed)}")
     if not parsed.empty:
-        parsed_path = os.path.join(out_rns, f"parsed_{date_str}.xlsx")
-        parsed.to_excel(parsed_path, index=False, engine='openpyxl')
+        parsed_path = os.path.join(out_rns, f"parsed_{date_str}.csv")
+        parsed.to_csv(parsed_path, index=False)
         print(f"[run] wrote {parsed_path}")
     else:
         print("[run] no parsed rows")

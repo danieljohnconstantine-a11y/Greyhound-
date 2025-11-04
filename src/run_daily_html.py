@@ -54,8 +54,8 @@ def main() -> int:
 
     df = fetch_and_parse_all(debug_root=root / "data" / "html" / "debug")
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    parsed_xlsx = data_dir / f"parsed_{ts}.xlsx"
-    df.to_excel(parsed_xlsx, index=False, engine='openpyxl')
+    parsed_csv = data_dir / f"parsed_{ts}.csv"
+    df.to_csv(parsed_csv, index=False)
 
     if df.empty:
         (reports / "summary.md").write_text("## Summary — empty data\n", encoding="utf-8")
@@ -63,12 +63,12 @@ def main() -> int:
         return 2
 
     probs = build_probs(df)
-    probs.to_excel(reports / "probabilities.xlsx", index=False, engine='openpyxl')
+    probs.to_csv(reports / "probabilities.csv", index=False)
     write_summary(probs, reports / "summary.md")
 
     print(f"[html] parsed_rows={len(df)}")
-    print(f"[html] wrote: {parsed_xlsx}")
-    print(f"[html] wrote: {reports / 'probabilities.xlsx'}")
+    print(f"[html] wrote: {parsed_csv}")
+    print(f"[html] wrote: {reports / 'probabilities.csv'}")
     print(f"[html] wrote: {reports / 'summary.md'}")
     return 0
 

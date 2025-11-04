@@ -36,8 +36,8 @@ def main():
     dd["prob_win"] = dd.groupby("key")["prob_win"].transform(lambda s: s / s.sum())
 
     # Save probabilities
-    probs_xlsx = OUT_DIR / "probabilities.xlsx"
-    dd[["track","date","race","box","runner","prob_win"]].to_excel(probs_xlsx, index=False, engine='openpyxl')
+    probs_csv = OUT_DIR / "probabilities.csv"
+    dd[["track","date","race","box","runner","prob_win"]].to_csv(probs_csv, index=False)
 
     # Simple picks (top box per race)
     picks = (
