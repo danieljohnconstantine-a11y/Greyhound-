@@ -72,10 +72,10 @@ if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--forms", default="forms")
-    ap.add_argument("--out", default="data/rns/parsed.csv")
+    ap.add_argument("--out", default="data/rns/parsed.xlsx")
     args = ap.parse_args()
 
     df = parse_folder(args.forms)
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
-    df.to_csv(args.out, index=False)
+    df.to_excel(args.out, index=False, engine='openpyxl')
     print(f"[parse] rows={len(df)} wrote={args.out}")
