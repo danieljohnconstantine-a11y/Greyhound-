@@ -21,14 +21,17 @@ DATA_DIR = "data"
 OUTPUT_DIR = "outputs"
 
 
-def setup_logging(output_dir: str) -> logging.Logger:
+def setup_logging(output_dir: str, verbose: bool = False) -> logging.Logger:
     """Setup logging to both console and file"""
     os.makedirs(output_dir, exist_ok=True)
     
     log_file = os.path.join(output_dir, "parse_enhanced.log")
     
+    # Set level based on verbose flag
+    log_level = logging.DEBUG if verbose else logging.INFO
+    
     logging.basicConfig(
-        level=logging.INFO,
+        level=log_level,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
             logging.FileHandler(log_file, mode='w'),
@@ -38,6 +41,8 @@ def setup_logging(output_dir: str) -> logging.Logger:
     
     logger = logging.getLogger(__name__)
     logger.info(f"Logging to: {log_file}")
+    if verbose:
+        logger.info("[VERBOSE MODE ENABLED] - Detailed race-by-page logging active")
     
     return logger
 
@@ -210,13 +215,13 @@ def log_statistics(df: pd.DataFrame, logger: logging.Logger):
     logger.info("="*60 + "\n")
 
 
-def main():
+def main(verbose: bool = False):
     """Main execution function"""
     print("\n" + "="*80)
     print("GREYHOUND FORM EXTRACTION PIPELINE - TODAY'S FORM")
     print("="*80 + "\n")
     
-    logger = setup_logging(OUTPUT_DIR)
+    logger = setup_logging(OUTPUT_DIR, verbose)
     
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -294,4 +299,22 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Greyhound form extraction pipeline with CSV/Excel output')
+    parser.add_argument('-v', '--verbose', action='store_true', 
+                        help='Enable verbose mode with detailed race-by-page logging')
+    parser.add_argument('--data-dir', default=DATA_DIR,
+                        help=f'Directory containing PDF files (default: {DATA_DIR})')
+    parser.add_argument('--output-dir', default=OUTPUT_DIR,
+                        help=f'Directory for output files (default: {OUTPUT_DIR})')
+    
+    args = parser.parse_args()
+    
+    # Update directories if specified
+    if args.data_dir != DATA_DIR:
+        DATA_DIR = args.data_dir
+    if args.output_dir != OUTPUT_DIR:
+        OUTPUT_DIR = args.output_dir
+    
+    main(verbose=args.verbose)

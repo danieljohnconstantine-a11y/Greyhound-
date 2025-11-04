@@ -423,24 +423,38 @@ def parse_pdf_file(filepath: str) -> pd.DataFrame:
                     text_layout = page.extract_text(layout=True)
                     lines = text_layout.split('\n')
                     
+                    lines_checked = 0
+                    lines_matched = 0
                     for line in lines:
                         if not line.strip():
                             continue
+                        
+                        # Check if line looks like a dog line for verbose logging
+                        if re.match(r'^\s*\d+\.\s', line):
+                            lines_checked += 1
+                            logger.debug(f"    Checking dog line: {line[:80]}")
                         
                         dog_record = parse_dog_summary_line(
                             line, track, race_num, current_distance,
                             current_race_date, current_race_class, source_pdf
                         )
                         if dog_record:
+                            lines_matched += 1
+                            logger.debug(f"      ✓ Matched: Box {dog_record['Box']}, Dog: {dog_record['DogName']}")
                             # Enrich with detailed section data
                             dog_record = enrich_record_with_details(dog_record, lines)
                             # Compute speed metrics
                             dog_record = compute_speed_metrics(dog_record)
                             race_rows.append(dog_record)
+                    
+                    if lines_checked > 0:
+                        logger.debug(f"    Page {page_num}: Checked {lines_checked} dog lines, matched {lines_matched}")
                 
                 # Add all dogs from this race
                 all_rows.extend(race_rows)
                 logger.debug(f"  Race {race_num}: extracted {len(race_rows)} dogs")
+                if len(race_rows) == 0 and logger.level == logging.DEBUG:
+                    logger.warning(f"  ⚠️  Race {race_num} detected but 0 dogs extracted - check regex patterns")
     
     except Exception as e:
         logger.error(f"Error processing PDF {filepath}: {e}")
@@ -485,9 +499,24 @@ def parse_directory(directory: str) -> pd.DataFrame:
     
     if all_dfs:
         combined_df = pd.concat(all_dfs, ignore_index=True)
-        # Final sort by Race and Box across all files
-        combined_df = combined_df.sort_values(['Race', 'Box']).reset_index(drop=True)
+        
+        # Remove any duplicates from overlapping PDFs (Track, Race, Box combination)
+        before_dedup = len(combined_df)
+        combined_df = combined_df.drop_duplicates(subset=['Track', 'Race', 'Box'], keep='first')
+        after_dedup = len(combined_df)
+        if before_dedup > after_dedup:
+            logger.info(f"  Removed {before_dedup - after_dedup} duplicate entries from overlapping PDFs")
+        
+        # Final sort by Track -> Race -> Box to ensure proper ordering for batch processing
+        if 'Track' in combined_df.columns and 'Race' in combined_df.columns and 'Box' in combined_df.columns:
+            combined_df = combined_df.sort_values(['Track', 'Race', 'Box']).reset_index(drop=True)
+        else:
+            combined_df = combined_df.sort_values(['Race', 'Box']).reset_index(drop=True)
+        
         logger.info(f"Total records: {len(combined_df)}")
+        logger.info(f"  Tracks: {combined_df['Track'].nunique() if 'Track' in combined_df.columns else 'N/A'}")
+        logger.info(f"  Races: {combined_df['Race'].nunique() if 'Race' in combined_df.columns else 'N/A'}")
+        
         return combined_df
     else:
         return pd.DataFrame(columns=COLUMNS)
