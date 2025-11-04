@@ -344,7 +344,7 @@ def compute_speed_metrics(record: Dict) -> Dict:
 
 
 def parse_pdf_file(filepath: str) -> pd.DataFrame:
-    """Parse a single PDF file and extract all fields"""
+    """Parse a single PDF file and extract all fields from ALL races"""
     logger.info(f"Parsing PDF: {filepath}")
     
     track = extract_track_from_filename(filepath)
@@ -358,11 +358,6 @@ def parse_pdf_file(filepath: str) -> pd.DataFrame:
         with pdfplumber.open(filepath) as pdf:
             logger.info(f"  Pages: {len(pdf.pages)}")
             
-            current_race = None
-            current_distance = None
-            current_race_date = None
-            current_race_class = None
-            
             # Try to extract track from content if needed
             if track == "UNKNOWN" and len(pdf.pages) > 0:
                 first_page_text = pdf.pages[0].extract_text()
@@ -371,31 +366,52 @@ def parse_pdf_file(filepath: str) -> pd.DataFrame:
                     if track_from_content:
                         track = track_from_content
             
-            for page_num, page in enumerate(pdf.pages, 1):
-                text = page.extract_text()
-                if not text:
-                    continue
+            # Extract all text from all pages
+            full_text = ""
+            for page in pdf.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    full_text += page_text + "\n"
+            
+            # Find ALL race headers in the document
+            race_headers = re.findall(r'Race\s*(?:No\.?\s*)?(\d+)', full_text, re.IGNORECASE)
+            unique_races = sorted(set(int(r) for r in race_headers if r.isdigit()))
+            
+            logger.info(f"  Found {len(unique_races)} unique races: {unique_races}")
+            
+            # Process each race separately
+            for race_num in unique_races:
+                race_rows = []
+                current_distance = None
+                current_race_date = None
+                current_race_class = None
                 
-                # Extract race-level information from each page
-                race_num = extract_race_number(text)
-                if race_num:
-                    current_race = race_num
-                    logger.debug(f"  Found Race {race_num} on page {page_num}")
-                
-                distance = extract_distance(text)
-                if distance:
-                    current_distance = distance
-                
-                race_date = extract_race_date(text)
-                if race_date:
-                    current_race_date = race_date
-                
-                race_class = extract_race_class(text)
-                if race_class:
-                    current_race_class = race_class
-                
-                # Parse dog entries on this page
-                if current_race:
+                for page_num, page in enumerate(pdf.pages, 1):
+                    text = page.extract_text()
+                    if not text:
+                        continue
+                    
+                    # Check if this page contains this race
+                    race_match = re.search(r'Race\s*(?:No\.?\s*)?' + str(race_num) + r'\b', text, re.IGNORECASE)
+                    if not race_match:
+                        continue
+                    
+                    logger.debug(f"  Processing Race {race_num} on page {page_num}")
+                    
+                    # Extract race-level information for this race
+                    distance = extract_distance(text)
+                    if distance:
+                        current_distance = distance
+                    
+                    race_date = extract_race_date(text)
+                    if race_date:
+                        current_race_date = race_date
+                    
+                    race_class = extract_race_class(text)
+                    if race_class:
+                        current_race_class = race_class
+                    
+                    # Parse dog entries on this page for this race
                     text_layout = page.extract_text(layout=True)
                     lines = text_layout.split('\n')
                     
@@ -404,7 +420,7 @@ def parse_pdf_file(filepath: str) -> pd.DataFrame:
                             continue
                         
                         dog_record = parse_dog_summary_line(
-                            line, track, current_race, current_distance,
+                            line, track, race_num, current_distance,
                             current_race_date, current_race_class, source_pdf
                         )
                         if dog_record:
@@ -412,7 +428,11 @@ def parse_pdf_file(filepath: str) -> pd.DataFrame:
                             dog_record = enrich_record_with_details(dog_record, lines)
                             # Compute speed metrics
                             dog_record = compute_speed_metrics(dog_record)
-                            all_rows.append(dog_record)
+                            race_rows.append(dog_record)
+                
+                # Add all dogs from this race
+                all_rows.extend(race_rows)
+                logger.debug(f"  Race {race_num}: extracted {len(race_rows)} dogs")
     
     except Exception as e:
         logger.error(f"Error processing PDF {filepath}: {e}")
@@ -426,7 +446,7 @@ def parse_pdf_file(filepath: str) -> pd.DataFrame:
     # Sort by Race then Box to maintain proper ordering
     df = df.sort_values(['Race', 'Box']).reset_index(drop=True)
     
-    logger.info(f"  Extracted {len(df)} dog records")
+    logger.info(f"  Extracted {len(df)} dog records from {len(unique_races) if 'unique_races' in locals() else 0} races")
     
     return df
 
