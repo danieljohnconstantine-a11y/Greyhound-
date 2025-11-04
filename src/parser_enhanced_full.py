@@ -158,7 +158,14 @@ def parse_dog_summary_line(line: str, track: str, race: int, distance: Optional[
     Extracts basic fields from the compact summary format.
     """
     # Pattern for standard format
+    # Try multiple box patterns
     box_match = re.match(r'\s*(\d+)\.\s+([\dx]{0,5})([A-Z][A-Za-z\'\s\-]+?)(?:\s+(\d+)([bdk]))', line)
+    if not box_match:
+        # Try alternative patterns: [1], (1), Box 1, #1
+        box_match = re.match(r'\s*[\[\(]?(\d{1,2})[\]\)]?\s+([\dx]{0,5})([A-Z][A-Za-z\'\s\-]+?)(?:\s+(\d+)([bdk]))', line)
+    if not box_match:
+        # Try pattern with Box/No prefix
+        box_match = re.match(r'\s*(?:Box|No\.?|#)\s*(\d{1,2})\s+([\dx]{0,5})([A-Z][A-Za-z\'\s\-]+?)(?:\s+(\d+)([bdk]))', line)
     if not box_match:
         return None
     
@@ -282,6 +289,60 @@ def parse_dog_summary_line(line: str, track: str, race: int, distance: Optional[
     return record
 
 
+def compute_speed_metrics(record: Dict) -> Dict:
+    """Compute speed-related metrics from extracted data"""
+    try:
+        # Extract distance and race time
+        distance = record.get('Distance')
+        race_time_str = record.get('RaceTime')
+        
+        if distance and race_time_str:
+            # Parse race time (formats: "0:30.41", "30.41", "00:30.41")
+            race_time_seconds = None
+            if ':' in str(race_time_str):
+                parts = str(race_time_str).split(':')
+                if len(parts) == 2:
+                    minutes = float(parts[0])
+                    seconds = float(parts[1])
+                    race_time_seconds = (minutes * 60) + seconds
+            else:
+                try:
+                    race_time_seconds = float(race_time_str)
+                except:
+                    pass
+            
+            # Compute SpeedIndex = Distance / Time (m/s)
+            if race_time_seconds and race_time_seconds > 0:
+                record['SpeedIndex'] = round(distance / race_time_seconds, 2)
+        
+        # Extract sectional times
+        sectional1 = record.get('Sectional1')
+        sectional2 = record.get('Sectional2')
+        sectional3 = record.get('Sectional3')
+        
+        # Compute SplitAvg from available sectionals
+        sectionals = [s for s in [sectional1, sectional2, sectional3] if s]
+        if sectionals:
+            try:
+                numeric_sectionals = [float(s) for s in sectionals]
+                record['SplitAvg'] = round(sum(numeric_sectionals) / len(numeric_sectionals), 2)
+                
+                # EarlySpeed from first sectional (if distance available)
+                if numeric_sectionals and distance:
+                    record['EarlySpeed'] = round((distance * 0.25) / numeric_sectionals[0], 2) if numeric_sectionals[0] > 0 else None
+                
+                # ClosingSpeed from last sectional
+                if len(numeric_sectionals) >= 2:
+                    record['ClosingSpeed'] = round((distance * 0.25) / numeric_sectionals[-1], 2) if numeric_sectionals[-1] > 0 else None
+            except:
+                pass
+                
+    except Exception as e:
+        logger.debug(f"Error computing speed metrics: {e}")
+    
+    return record
+
+
 def parse_pdf_file(filepath: str) -> pd.DataFrame:
     """Parse a single PDF file and extract all fields"""
     logger.info(f"Parsing PDF: {filepath}")
@@ -301,7 +362,6 @@ def parse_pdf_file(filepath: str) -> pd.DataFrame:
             current_distance = None
             current_race_date = None
             current_race_class = None
-            prev_race = None
             
             # Try to extract track from content if needed
             if track == "UNKNOWN" and len(pdf.pages) > 0:
@@ -316,11 +376,10 @@ def parse_pdf_file(filepath: str) -> pd.DataFrame:
                 if not text:
                     continue
                 
-                # Extract race-level information
+                # Extract race-level information from each page
                 race_num = extract_race_number(text)
-                if race_num and race_num != prev_race:
+                if race_num:
                     current_race = race_num
-                    prev_race = race_num
                     logger.debug(f"  Found Race {race_num} on page {page_num}")
                 
                 distance = extract_distance(text)
@@ -335,7 +394,7 @@ def parse_pdf_file(filepath: str) -> pd.DataFrame:
                 if race_class:
                     current_race_class = race_class
                 
-                # Parse dog entries
+                # Parse dog entries on this page
                 if current_race:
                     text_layout = page.extract_text(layout=True)
                     lines = text_layout.split('\n')
@@ -351,6 +410,8 @@ def parse_pdf_file(filepath: str) -> pd.DataFrame:
                         if dog_record:
                             # Enrich with detailed section data
                             dog_record = enrich_record_with_details(dog_record, lines)
+                            # Compute speed metrics
+                            dog_record = compute_speed_metrics(dog_record)
                             all_rows.append(dog_record)
     
     except Exception as e:
