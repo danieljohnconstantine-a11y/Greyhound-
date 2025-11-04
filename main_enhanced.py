@@ -174,7 +174,7 @@ def main():
     
     # Parse all PDFs using enhanced parser
     print(f"Processing PDFs from: {DATA_DIR}\n")
-    df = parse_directory(DATA_DIR, logger)
+    df = parse_directory(DATA_DIR)
     
     if df.empty:
         print("\n[WARN] No data extracted from PDFs.")
