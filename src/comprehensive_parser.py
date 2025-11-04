@@ -100,7 +100,7 @@ def extract_box_number_robust(line: str) -> Optional[int]:
 
 
 def extract_distance_robust(text: str) -> Optional[int]:
-    """Extract distance with pattern: (\d{3,4})\s*m"""
+    r"""Extract distance with pattern: (\d{3,4})\s*m"""
     match = re.search(r'\b(\d{3,4})\s*m\b', text)
     if match:
         try:

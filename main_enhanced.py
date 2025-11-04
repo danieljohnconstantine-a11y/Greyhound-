@@ -13,8 +13,8 @@ import pandas as pd
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from comprehensive_parser import ComprehensiveParser
-from enhanced_validation import EnhancedValidator
+# Import the existing enhanced parser
+from parser_enhanced_full import parse_directory
 
 # Directory configuration
 DATA_DIR = "data"
@@ -172,10 +172,9 @@ def main():
     logger.info(f"Output directory: {os.path.abspath(OUTPUT_DIR)}")
     logger.info(f"Extracting 62 fields per dog")
     
-    # Parse all PDFs using ComprehensiveParser
+    # Parse all PDFs using enhanced parser
     print(f"Processing PDFs from: {DATA_DIR}\n")
-    parser = ComprehensiveParser()
-    df = parser.parse_directory(DATA_DIR)
+    df = parse_directory(DATA_DIR, logger)
     
     if df.empty:
         print("\n[WARN] No data extracted from PDFs.")
@@ -197,11 +196,9 @@ def main():
     # Log statistics
     log_statistics(df, logger)
     
-    # Validate data integrity using EnhancedValidator
+    # Validate data integrity
     print("\nValidating data integrity...")
-    validator = EnhancedValidator()
-    validation_passed = validator.validate_dataframe(df, logger)
-    validate_data_integrity(df, logger)
+    validation_passed = validate_data_integrity(df, logger)
     
     if not validation_passed:
         logger.warning("[WARN] Some validation checks failed - review log for details")
