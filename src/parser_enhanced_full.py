@@ -23,6 +23,12 @@ RACE_HEADER_PATTERN = re.compile(r"Race\s+No?\s+(\d+)", re.IGNORECASE)
 ALT_RACE_PATTERN = re.compile(r"(?:Broken\s+Hill|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+Race\s+(\d+)", re.IGNORECASE)
 DISTANCE_PATTERN = re.compile(r"(\d+)m")
 
+# Speed extraction regex patterns (QLAKG/NT format)
+RACE_TIME_RE = re.compile(r"Race Time\s*(?P<time>\d{1,2}:\d{2}\.\d{2}|\d{1,2}\.\d{2})")
+SEC_TIME_RE = re.compile(r"Sec Time\s*(?P<sectional>\d{1,2}\.\d{2})")
+SEC_TIME_ADJ_RE = re.compile(r"Sec Time Adj\s*(?P<adj>\d{1,2}\.\d{2})")
+DISTANCE_RE = re.compile(r"Distance\s*(?P<dist>\d{2,3})m")
+
 # Exact column order as specified
 COLUMNS = [
     "Track", "Race", "Box", "DogName", "Trainer", "Grade", "Distance", "RaceDate",
@@ -156,6 +162,68 @@ def extract_split_times(text: str) -> tuple:
     sectional3 = sectionals[2] if len(sectionals) > 2 else None
     
     return sectional1, sectional2, sectional3
+
+
+def extract_speed_variables(block_text: str) -> Dict:
+    """
+    Extract speed variables from a dog's text block (QLAKG/NT format).
+    Returns: dict with Distance, BestTime, BestTimeSec, Sectional1, SectionalAdj,
+             and computed metrics (SpeedIndex, SplitAvg, EarlySpeed, ClosingSpeed)
+    """
+    spd = {}
+    
+    # Extract Distance
+    m_dist = DISTANCE_RE.search(block_text)
+    if m_dist:
+        spd["Distance"] = int(m_dist.group("dist"))
+    
+    # Extract Race Time (BestTime)
+    m_race = RACE_TIME_RE.search(block_text)
+    if m_race:
+        raw_time = m_race.group("time")
+        spd["BestTime"] = raw_time
+        
+        # Convert to seconds
+        if ":" in raw_time:
+            parts = raw_time.split(":")
+            minutes = int(parts[0])
+            seconds = float(parts[1])
+            spd["BestTimeSec"] = (minutes * 60) + seconds
+        else:
+            spd["BestTimeSec"] = float(raw_time)
+    
+    # Extract Sectional Time (Sectional1)
+    m_sec = SEC_TIME_RE.search(block_text)
+    if m_sec:
+        spd["Sectional1"] = float(m_sec.group("sectional"))
+    
+    # Extract Sectional Adjusted (optional)
+    m_adj = SEC_TIME_ADJ_RE.search(block_text)
+    if m_adj:
+        spd["SectionalAdj"] = float(m_adj.group("adj"))
+    
+    # Compute derived metrics
+    dist = spd.get("Distance")
+    bt = spd.get("BestTimeSec")
+    s1 = spd.get("Sectional1")
+    
+    # SplitAvg = Sectional1 (only one split for QLAKG format)
+    if s1:
+        spd["SplitAvg"] = s1
+    
+    # SpeedIndex = Distance / BestTimeSec (m/s)
+    if dist and bt and bt > 0:
+        spd["SpeedIndex"] = round(dist / bt, 2)
+    
+    # EarlySpeed = (Distance * 0.25) / Sectional1
+    if dist and s1 and s1 > 0:
+        spd["EarlySpeed"] = round((dist * 0.25) / s1, 2)
+    
+    # ClosingSpeed = (Distance * 0.75) / (BestTimeSec - Sectional1)
+    if dist and bt and s1 and (bt - s1) > 0:
+        spd["ClosingSpeed"] = round((dist * 0.75) / (bt - s1), 2)
+    
+    return spd
 
 
 def parse_dog_summary_line(line: str, track: str, race: int, distance: Optional[int], 
