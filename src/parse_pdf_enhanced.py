@@ -164,13 +164,28 @@ def parse_dog_details(lines: List[str], start_idx: int) -> Optional[Dict[str, An
             dog_info["dam"] = pedigree_match.group(2).strip()
             idx += 1
     
-    # Parse distances
+    # Parse distances (may span multiple lines)
     if idx < len(lines):
         dist_match = DISTANCE_LINE.match(lines[idx].strip())
         if dist_match:
             dog_info["raced_distance"] = dist_match.group(1).strip()
-            dog_info["winning_distance"] = dist_match.group(2).strip()
+            winning_dist = dist_match.group(2).strip()
             idx += 1
+            
+            # Winning distance may continue on next line(s)
+            while idx < len(lines):
+                next_line = lines[idx].strip()
+                # Check if line continues distance info (starts with lowercase or digit, contains "m")
+                if next_line and not next_line.startswith('Owner:') and not next_line.isupper():
+                    if 'm' in next_line or next_line[0].isdigit():
+                        winning_dist += " " + next_line
+                        idx += 1
+                    else:
+                        break
+                else:
+                    break
+            
+            dog_info["winning_distance"] = winning_dist
     
     # Parse owner
     if idx < len(lines):
