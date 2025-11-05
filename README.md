@@ -1,24 +1,30 @@
-# Greyhound-
-Greyhound daily form guide 
-import requests
-from datetime import datetime
+# Greyhound Form Guide Processor
 
-# List of form guide URLs for today's races
-URLS = [
-    "https://files.racingandsports.com/racing/racing/raceinfo/newformpdf/SALEG3108form.pdf",
-    "https://files.racingandsports.com/racing/racing/raceinfo/newformpdf/RICHG3108form.pdf",
-    # add all the others here...
-]
+Automated greyhound racing form guide processing system. Fetches, parses, and analyzes race forms from Racing & Sports Australia.
 
-today = datetime.now().strftime("%Y-%m-%d")
+## Quick Start
 
-for url in URLS:
-    filename = url.split("/")[-1]
-    print(f"Downloading {filename}...")
-    r = requests.get(url)
-    if r.status_code == 200:
-        with open(filename, "wb") as f:
-            f.write(r.content)
-        print(f"Saved {filename}")
-    else:
-        print(f"Failed to fetch {url}"
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run complete pipeline for today
+python main.py
+
+# Run daily processing (Windows)
+run_main.bat
+
+# Run tests
+python test_parser.py
+```
+
+## Project Structure
+
+- `main.py` - Main entry point for processing
+- `run_daily.py` - Daily wrapper script
+- `debug_parser.py` - Parser debugging utility
+- `test_parser.py` - Parser test suite
+- `parser/` - PDF parsing module
+- `data/` - Raw data storage
+- `outputs/` - Generated reports and predictions
+- `src/` - Additional processing modules
