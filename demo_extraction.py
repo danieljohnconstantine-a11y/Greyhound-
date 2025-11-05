@@ -39,6 +39,7 @@ def display_dog_info(dog, show_race_history=True):
     print(format_field("Weight", f"{dog['weight']}kg"))
     print(format_field("Color", dog['color']))
     print(format_field("Age", dog['age']))
+    # Note: 'sex' field is about the greyhound (Dog/Bitch), not sensitive human data
     print(format_field("Sex", dog['sex']))
     
     print("\n### PEDIGREE")
