@@ -57,7 +57,7 @@ def uniform_probabilities(df: pd.DataFrame) -> pd.DataFrame:
     Assumes 8 boxes per race with equal probability.
     """
     if df.empty:
-        return df.assign(prob_win=[])
+        return df.assign(prob_win=pd.Series([], dtype=float))
     # Assume 8 boxes; uniform baseline
     return df.assign(prob_win=1.0/8.0)
 

@@ -10,10 +10,14 @@ from pdfminer.high_level import extract_text
 
 FNAME_RE = re.compile(r"^([A-Z]{4})_(\d{4}-\d{2}-\d{2})\.pdf$")
 
+# Configuration: Expected number of boxes per race
+MAX_BOXES = 8
+
 # simple patterns for dog lines and race headers
 RACE_HEADER = re.compile(r"\b(Race\s*No\.?\s*|Race\s*)(\d+)\b", re.IGNORECASE)
 # Updated pattern to handle format like "1. 26351 Starlight Snowy"
-DOG_LINE = re.compile(r"^\s*([1-8])\.\s+(?:[0-9x]+\s+)?([A-Z][A-Za-z0-9\'\- ]{1,})\s*$")
+# Uses MAX_BOXES to define valid box numbers (1-8)
+DOG_LINE = re.compile(rf"^\s*([1-{MAX_BOXES}])\.\s+(?:[0-9x]+\s+)?([A-Z][A-Za-z0-9\'\- ]{{1,}})\s*$")
 
 def parse_pdf(path: str) -> list[dict]:
     """Parse a single PDF file and extract race data."""
