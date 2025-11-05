@@ -8,10 +8,13 @@ import os
 import re
 import json
 import pandas as pd
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from pdfminer.high_level import extract_text
 
 FNAME_RE = re.compile(r"^([A-Z]{4})_(\d{4}-\d{2}-\d{2})\.pdf$")
+
+# Constants for parsing
+MAX_TRAINER_NAME_WORDS = 4  # Maximum words in a trainer name
 
 # Pattern for race headers
 RACE_HEADER = re.compile(r"\b(Race\s*No\.?\s*|Race\s*)(\d+)\b", re.IGNORECASE)
@@ -67,10 +70,16 @@ def parse_stat_line(lines: List[str], idx: int) -> tuple:
     return None, None, idx + 1
 
 
-def parse_dog_details(lines: List[str], start_idx: int) -> Optional[Dict[str, Any]]:
+def parse_dog_details(lines: List[str], start_idx: int) -> tuple:
     """
     Parse detailed information for a single dog starting from start_idx.
-    Returns dict with all extracted information and the next line index.
+    
+    Args:
+        lines: List of text lines from PDF
+        start_idx: Starting line index
+        
+    Returns:
+        Tuple of (dog_info dict, next_line_index)
     """
     dog_info = {
         "box": None,
@@ -177,7 +186,8 @@ def parse_dog_details(lines: List[str], start_idx: int) -> Optional[Dict[str, An
                 next_line = lines[idx].strip()
                 # Check if line continues distance info (starts with lowercase or digit, contains "m")
                 if next_line and not next_line.startswith('Owner:') and not next_line.isupper():
-                    if 'm' in next_line or next_line[0].isdigit():
+                    # Check if line starts with digit or contains 'm' (meter symbol)
+                    if 'm' in next_line or (len(next_line) > 0 and next_line[0].isdigit()):
                         winning_dist += " " + next_line
                         idx += 1
                     else:
@@ -206,7 +216,7 @@ def parse_dog_details(lines: List[str], start_idx: int) -> Optional[Dict[str, An
     # Parse trainer name
     if idx < len(lines):
         trainer_line = lines[idx].strip()
-        if trainer_line and trainer_line.isupper() and len(trainer_line.split()) <= 4:
+        if trainer_line and trainer_line.isupper() and len(trainer_line.split()) <= MAX_TRAINER_NAME_WORDS:
             dog_info["trainer"] = trainer_line
             idx += 1
     
@@ -429,14 +439,17 @@ def parse_pdf_enhanced(path: str) -> List[Dict[str, Any]]:
                 current_race = int(rh.group(2))
             except Exception:
                 pass
-        elif line == "Race No" and idx + 2 < len(lines):
-            # Look ahead for race number
-            next_line = lines[idx + 1].strip()
-            next_next = lines[idx + 2].strip()
-            if not next_line and next_next.isdigit():
-                current_race = int(next_next)
-            elif next_line.isdigit():
-                current_race = int(next_line)
+        elif line == "Race No":
+            # Look ahead for race number on next line(s)
+            if idx + 1 < len(lines):
+                next_line = lines[idx + 1].strip()
+                if next_line.isdigit():
+                    current_race = int(next_line)
+                elif not next_line and idx + 2 < len(lines):
+                    # Race number might be on line after empty line
+                    next_next = lines[idx + 2].strip()
+                    if next_next.isdigit():
+                        current_race = int(next_next)
         
         # Check for dog detail section
         if DOG_DETAIL_START.match(line) and current_race is not None:
