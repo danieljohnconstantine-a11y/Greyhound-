@@ -69,7 +69,7 @@ def export_reports(df: pd.DataFrame, output_dir: str) -> tuple:
 def validate_csv_excel_integrity(csv_path: str, excel_path: str, logger: logging.Logger) -> bool:
     """Validate that CSV and Excel outputs contain identical data row-for-row"""
     logger.info("\n" + "="*60)
-    logger.info("CSV ↔ EXCEL DATA INTEGRITY VALIDATION")
+    logger.info("CSV <-> EXCEL DATA INTEGRITY VALIDATION")
     logger.info("="*60)
     
     try:
@@ -266,7 +266,7 @@ def main(verbose: bool = False):
     csv_path, excel_path = export_reports(df, OUTPUT_DIR)
     
     # Validate CSV vs Excel integrity
-    print("\nValidating CSV ↔ Excel integrity...")
+    print("\nValidating CSV <-> Excel integrity...")
     csv_excel_valid = validate_csv_excel_integrity(csv_path, excel_path, logger)
     if not csv_excel_valid:
         logger.warning("[WARN] CSV/Excel validation had issues - review log")
