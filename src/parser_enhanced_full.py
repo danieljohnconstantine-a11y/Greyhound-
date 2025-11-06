@@ -24,7 +24,8 @@ ALT_RACE_PATTERN = re.compile(r"(?:Broken\s+Hill|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)
 DISTANCE_PATTERN = re.compile(r"(\d+)m")
 
 # Speed extraction regex patterns (QLAKG/NT format)
-RACE_TIME_RE = re.compile(r"Race Time\s*(?P<time>\d{1,2}:\d{2}\.\d{2}|\d{1,2}\.\d{2})")
+# QLAKG format: "0:20.00 Sec Time 1.87 BP 4..." (time comes first, no "Race Time" prefix)
+RACE_TIME_RE = re.compile(r"(?:Race Time\s*)?(?P<time>\d{1,2}:\d{2}\.\d{2}|\d{1,2}\.\d{2})\s+Sec Time")
 SEC_TIME_RE = re.compile(r"Sec Time\s*(?P<sectional>\d{1,2}\.\d{2})")
 SEC_TIME_ADJ_RE = re.compile(r"Sec Time Adj\s*(?P<adj>\d{1,2}\.\d{2})")
 DISTANCE_RE = re.compile(r"Distance\s*(?P<dist>\d{2,3})m")
@@ -224,6 +225,97 @@ def extract_speed_variables(block_text: str) -> Dict:
         spd["ClosingSpeed"] = round((dist * 0.75) / (bt - s1), 2)
     
     return spd
+
+
+def enrich_record_with_detail_block(record: Dict, detail_block: str) -> Dict:
+    """
+    Enrich a dog record with data from the detail block (Section 2).
+    Extracts race history and computes speed metrics.
+    """
+    if not detail_block:
+        return record
+    
+    # Try to extract speed variables from the detail block using race history parser
+    try:
+        from race_history_parser import parse_race_history_line, extract_race_history_section
+        
+        # Extract race history lines from detail block
+        history_lines = extract_race_history_section(detail_block)
+        
+        # Parse the most recent race (first line in history)
+        if history_lines:
+            most_recent = parse_race_history_line(history_lines[0])
+            
+            if most_recent:
+                # Update record with extracted values
+                if 'distance' in most_recent:
+                    record['Distance'] = most_recent['distance']
+                
+                if 'race_time' in most_recent:
+                    record['BestTime'] = most_recent['race_time']
+                
+                if 'sectional_time' in most_recent:
+                    record['Sectional1'] = most_recent['sectional_time']
+                
+                # Compute derived metrics if we have the required data
+                dist = record.get('Distance')
+                bt_sec = most_recent.get('race_time_seconds')
+                s1 = record.get('Sectional1')
+                
+                # SplitAvg = Sectional1 (only one split for QLAKG format)
+                if s1:
+                    record['SplitAvg'] = s1
+                
+                # SpeedIndex = Distance / BestTimeSec (m/s)
+                if dist and bt_sec and bt_sec > 0:
+                    record['SpeedIndex'] = round(dist / bt_sec, 2)
+                
+                # EarlySpeed = (Distance * 0.25) / Sectional1
+                if dist and s1 and s1 > 0:
+                    record['EarlySpeed'] = round((dist * 0.25) / s1, 2)
+                
+                # ClosingSpeed = (Distance * 0.75) / (BestTimeSec - Sectional1)
+                if dist and bt_sec and s1 and (bt_sec - s1) > 0:
+                    record['ClosingSpeed'] = round((dist * 0.75) / (bt_sec - s1), 2)
+                
+                # Extract finish position and margin
+                if 'finish_position' in most_recent:
+                    record['LastStartResult'] = f"{most_recent['finish_position']}"
+                
+                if 'margin' in most_recent:
+                    record['LastStartMargin'] = str(most_recent['margin'])
+    
+    except Exception as e:
+        # If race history parsing fails, try the old speed extraction method
+        speed_data = extract_speed_variables(detail_block)
+        if speed_data:
+            # Merge speed data into record
+            for key, value in speed_data.items():
+                if value is not None:
+                    record[key] = value
+    
+    # Extract additional fields from detail block
+    # Owner
+    owner_match = re.search(r'Owner[:\s]+([A-Z][A-Za-z\s\-]+?)(?:\s+Sire|$)', detail_block, re.IGNORECASE)
+    if owner_match:
+        record['Owner'] = owner_match.group(1).strip()
+    
+    # Sire and Dam
+    sire_match = re.search(r'Sire[:\s]+([A-Z][A-Za-z\s\-]+?)(?:\s+Dam|$)', detail_block, re.IGNORECASE)
+    if sire_match:
+        record['Sire'] = sire_match.group(1).strip()
+    
+    dam_match = re.search(r'Dam[:\s]+([A-Z][A-Za-z\s\-]+?)(?:\s|$)', detail_block, re.IGNORECASE)
+    if dam_match:
+        record['Dam'] = dam_match.group(1).strip()
+    
+    # Color
+    color_match = re.search(r'(bk|w|bd|f|bkw|be)\s+(dog|bitch)', detail_block.lower())
+    if color_match:
+        color_map = {'bk': 'Black', 'w': 'White', 'bd': 'Brindle', 'f': 'Fawn', 'bkw': 'Black & White', 'be': 'Blue'}
+        record['Color'] = color_map.get(color_match.group(1), color_match.group(1))
+    
+    return record
 
 
 def parse_dog_summary_line(line: str, track: str, race: int, distance: Optional[int], 

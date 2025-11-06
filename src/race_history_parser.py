@@ -207,41 +207,91 @@ def extract_speed_metrics_from_history(lines: List[str]) -> Dict:
 def extract_race_history_section(lines: List[str], dog_name: str, box_num: int) -> List[str]:
     """
     Extract the race history section for a specific dog.
-    Looks for lines containing race results after the dog's summary line.
-    """
-    history_lines = []
-    in_history = False
-    lines_since_dog = 0
     
+    QLAKG Format: Race history lines appear BEFORE the dog name.
+    Other formats: Race history lines appear AFTER the dog name.
+    
+    This function checks both patterns.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    history_lines = []
+    dog_line_idx = None
+    
+    # First, find the dog's name line - be more flexible
     for i, line in enumerate(lines):
-        # Look for the dog's summary line (contains box number and dog name)
-        if not in_history and str(box_num) in line and dog_name in line.upper():
-            in_history = True
-            lines_since_dog = 0
+        # Look for the dog's name
+        if dog_name.upper() in line.upper():
+            # Check if this is likely the dog name header
+            # Dog name lines usually don't have dates/race times
+            has_date = re.search(r'\d{1,2}/\d{1,2}/\d{4}', line)
+            has_race_time = 'Race Time' in line
+            # Accept as dog name line if it doesn't have race data
+            if not has_date and not has_race_time:
+                dog_line_idx = i
+                logger.debug(f"Found dog '{dog_name}' at line {i}: {line[:60]}")
+                break
+    
+    if dog_line_idx is None:
+        logger.warning(f"Could not find dog name '{dog_name}' in text")
+        return []
+    
+    # QLAKG Format: Check for race history BEFORE the dog name
+    # Look backwards from the dog name line
+    for i in range(dog_line_idx - 1, max(0, dog_line_idx - 30), -1):
+        line = lines[i].strip()
+        if not line:
             continue
         
-        if in_history:
-            lines_since_dog += 1
-            
-            # Collect lines that look like race history
-            # QLAKG format: has date (DD/MM/YYYY), track code, distance (XXXm), and "Race Time"
-            # Example: "5/10/2025 CAPA 366m 1.87 Race Time 0:20.00 Sec Time 1.87 Margin 8.6"
-            has_date = re.search(r'\d{1,2}/\d{1,2}/\d{4}', line)
-            has_distance = re.search(r'\d{3,4}m', line)
-            has_race_time = 'Race Time' in line or 'Sec Time' in line
-            
-            # Also match old format: "1st of 8" style
-            has_placement = re.search(r'\d+(?:st|nd|rd|th)\s+of\s+\d+', line)
-            
-            if (has_date and has_distance) or (has_date and has_race_time) or has_placement:
+        # Stop if we hit another dog's name (all caps line without dates, short)
+        if len(line) < 50 and line.isupper() and not re.search(r'\d{1,2}/\d{1,2}/\d{4}', line):
+            break
+        
+        # Check if this is a race history line - be more lenient
+        has_date = re.search(r'\d{1,2}/\d{1,2}/\d{4}', line)
+        has_distance = re.search(r'\d{3,4}m', line)
+        has_race_time = 'Race Time' in line
+        has_sec_time = 'Sec Time' in line
+        has_placement = re.search(r'\d+(?:st|nd|rd|th)\s+of\s+\d+', line) or 'Position:' in line
+        
+        # Match any line with race timing data
+        if has_date or has_race_time or has_sec_time or has_placement:
+            if has_distance or has_race_time or has_sec_time:  # Must have some meaningful data
+                history_lines.insert(0, line)  # Insert at beginning to maintain order
+                logger.debug(f"Found history line (before): {line[:80]}")
+    
+    # If we found history before the dog name, return it (QLAKG format)
+    if history_lines:
+        logger.info(f"Found {len(history_lines)} race history lines BEFORE dog name (QLAKG format)")
+        return history_lines
+    
+    # Otherwise, check for race history AFTER the dog name (traditional format)
+    for i in range(dog_line_idx + 1, min(len(lines), dog_line_idx + 30)):
+        line = lines[i].strip()
+        if not line:
+            continue
+        
+        # Check if this is a race history line
+        has_date = re.search(r'\d{1,2}/\d{1,2}/\d{4}', line)
+        has_distance = re.search(r'\d{3,4}m', line)
+        has_race_time = 'Race Time' in line
+        has_sec_time = 'Sec Time' in line
+        has_placement = re.search(r'\d+(?:st|nd|rd|th)\s+of\s+\d+', line) or 'Position:' in line
+        
+        # Match any line with race timing data
+        if has_date or has_race_time or has_sec_time or has_placement:
+            if has_distance or has_race_time or has_sec_time:  # Must have some meaningful data
                 history_lines.append(line)
-            
-            # Stop after reasonable number of lines or when we hit next dog
-            if lines_since_dog > 30:
-                break
-            
-            # Stop if we hit next dog's summary (new box number at start of line)
-            if re.match(r'^\d+\.\s+[A-Z]', line):
-                break
+                logger.debug(f"Found history line (after): {line[:80]}")
+        
+        # Stop if we hit next dog's name (short all-caps line)
+        if len(line) < 50 and line.isupper():
+            break
+    
+    if history_lines:
+        logger.info(f"Found {len(history_lines)} race history lines AFTER dog name (traditional format)")
+    else:
+        logger.warning(f"No race history found for dog '{dog_name}'")
     
     return history_lines
