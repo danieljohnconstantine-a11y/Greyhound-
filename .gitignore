@@ -58,3 +58,8 @@ debug/
 
 # Allow reports to be committed (probabilities, summaries, bets)
 # (Do NOT ignore reports/; the workflows write reports here)
+
+# Ignore output files from parser runs (CSV/Excel)
+outputs/*.csv
+outputs/*.xlsx
+outputs/*.log
