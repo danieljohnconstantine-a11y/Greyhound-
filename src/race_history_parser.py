@@ -15,7 +15,9 @@ def parse_race_history_line(line: str) -> Optional[Dict]:
     """
     Parse a single race history line to extract timing and distance data.
     
-    Example line: "7th of 8 12/10/2025 RICHMOND Margin 16.3 Lengths Distance 520m SOT G RST MDN Race LADBROKES SRM IN MULTIS BATTLERS MAIDEN Prize $1,790 API 0.07 Race Time 0:30.41 Sec Time 4.39 Sec Time Adj 0.05 BP 5 Odds 40"
+    Example line formats:
+    - Old format: "7th of 8 12/10/2025 RICHMOND Margin 16.3 Lengths Distance 520m ... Race Time 0:30.41 Sec Time 4.39"
+    - QLAKG format: "5/10/2025 CAPA 366m 1.87 Race Time 0:20.00 Sec Time 1.87 Margin 8.6 Lengths Position: 8"
     
     Returns dict with:
         - distance: int (meters)
@@ -29,27 +31,38 @@ def parse_race_history_line(line: str) -> Optional[Dict]:
     if not line or len(line) < 20:
         return None
     
-    # Check if this looks like a race history line (has placement and distance)
-    if not re.search(r'\d+(?:st|nd|rd|th)\s+of\s+\d+', line):
+    # Check if this looks like a race history line
+    # Must have either: (a) placement AND distance, or (b) date AND distance AND race time
+    has_old_placement = re.search(r'\d+(?:st|nd|rd|th)\s+of\s+\d+', line)
+    has_date = re.search(r'\d{1,2}/\d{1,2}/\d{4}', line)
+    has_distance = re.search(r'(\d{3,4})m', line)
+    has_race_time = re.search(r'Race Time\s+([\d:\.]+)', line)
+    
+    if not ((has_old_placement and has_distance) or (has_date and has_distance and has_race_time)):
         return None
     
     result = {}
     
-    # Extract placement (e.g., "7th of 8")
+    # Extract placement (old format: "7th of 8", QLAKG format: "Position: 8")
     placement_match = re.search(r'(\d+)(?:st|nd|rd|th)\s+of\s+(\d+)', line)
     if placement_match:
         result['placement'] = placement_match.group(0)
         result['finish_position'] = int(placement_match.group(1))
         result['field_size'] = int(placement_match.group(2))
+    else:
+        # Try QLAKG format "Position: 8"
+        position_match = re.search(r'Position:\s*(\d+)', line)
+        if position_match:
+            result['finish_position'] = int(position_match.group(1))
     
-    # Extract distance (e.g., "Distance 520m" or just "520m")
-    distance_match = re.search(r'Distance\s+(\d+)m|(\d{3})m', line)
+    # Extract distance (e.g., "Distance 520m" or just "366m")
+    distance_match = re.search(r'(?:Distance\s+)?(\d{3,4})m', line)
     if distance_match:
-        result['distance'] = int(distance_match.group(1) or distance_match.group(2))
+        result['distance'] = int(distance_match.group(1))
     else:
         return None  # Must have distance to be useful
     
-    # Extract margin (e.g., "Margin 16.3")
+    # Extract margin (e.g., "Margin 16.3" or "Margin 8.6 Lengths")
     margin_match = re.search(r'Margin\s+([\d\.]+)', line)
     if margin_match:
         try:
@@ -57,7 +70,7 @@ def parse_race_history_line(line: str) -> Optional[Dict]:
         except ValueError:
             result['margin'] = None
     
-    # Extract Race Time (e.g., "Race Time 0:30.41")
+    # Extract Race Time (e.g., "Race Time 0:30.41" or "Race Time 0:20.00")
     race_time_match = re.search(r'Race Time\s+([\d:\.]+)', line)
     if race_time_match:
         result['race_time'] = race_time_match.group(1)
@@ -210,15 +223,24 @@ def extract_race_history_section(lines: List[str], dog_name: str, box_num: int) 
         if in_history:
             lines_since_dog += 1
             
-            # Collect lines that look like race history (have placement)
-            if re.search(r'\d+(?:st|nd|rd|th)\s+of\s+\d+', line):
+            # Collect lines that look like race history
+            # QLAKG format: has date (DD/MM/YYYY), track code, distance (XXXm), and "Race Time"
+            # Example: "5/10/2025 CAPA 366m 1.87 Race Time 0:20.00 Sec Time 1.87 Margin 8.6"
+            has_date = re.search(r'\d{1,2}/\d{1,2}/\d{4}', line)
+            has_distance = re.search(r'\d{3,4}m', line)
+            has_race_time = 'Race Time' in line or 'Sec Time' in line
+            
+            # Also match old format: "1st of 8" style
+            has_placement = re.search(r'\d+(?:st|nd|rd|th)\s+of\s+\d+', line)
+            
+            if (has_date and has_distance) or (has_date and has_race_time) or has_placement:
                 history_lines.append(line)
             
             # Stop after reasonable number of lines or when we hit next dog
             if lines_since_dog > 30:
                 break
             
-            # Stop if we hit next dog's summary (new box number)
+            # Stop if we hit next dog's summary (new box number at start of line)
             if re.match(r'^\d+\.\s+[A-Z]', line):
                 break
     

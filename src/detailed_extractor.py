@@ -212,23 +212,4 @@ def enrich_record_with_details(record: Dict, lines: List[str]) -> Dict:
         if key in record and value is not None:
             record[key] = value
     
-    # Also try QLAKG-style speed extraction from the text block
-    # Join lines to create a searchable block
-    block_text = '\n'.join(lines)
-    try:
-        # Import the speed extraction function from parser_enhanced_full
-        import sys
-        import os
-        sys.path.insert(0, os.path.dirname(__file__))
-        from parser_enhanced_full import extract_speed_variables
-        
-        speed_vars = extract_speed_variables(block_text)
-        # Merge speed variables, but don't overwrite existing values
-        for key, value in speed_vars.items():
-            if value is not None and (record.get(key) is None or key == "Distance"):
-                record[key] = value
-    except Exception as e:
-        # If import fails or extraction fails, silently continue
-        pass
-    
     return record
