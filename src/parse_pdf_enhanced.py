@@ -469,7 +469,7 @@ def parse_pdf_enhanced(path: str) -> List[Dict[str, Any]]:
 
 
 def parse_folder_enhanced(forms_dir: str) -> pd.DataFrame:
-    """Parse all PDFs in a folder with enhanced extraction."""
+    """Parse all PDFs in a folder with enhanced extraction. Returns sorted DataFrame."""
     all_rows: List[Dict[str, Any]] = []
     
     for fn in sorted(os.listdir(forms_dir)):
@@ -484,7 +484,12 @@ def parse_folder_enhanced(forms_dir: str) -> pd.DataFrame:
         all_rows.extend(rows)
         print(f"  Extracted {len(rows)} dogs")
     
-    return pd.DataFrame(all_rows)
+    df = pd.DataFrame(all_rows)
+    # Sort by track, race, then box
+    if not df.empty:
+        df = df.sort_values(by=['track', 'race', 'box'], ascending=[True, True, True])
+    
+    return df
 
 
 if __name__ == "__main__":
@@ -519,16 +524,22 @@ if __name__ == "__main__":
         print(f"  Extracted {len(rows)} dogs")
     
     if all_rows:
-        # Save as CSV
+        # Create DataFrame and sort by track, race, then box
         df = pd.DataFrame(all_rows)
+        df = df.sort_values(by=['track', 'race', 'box'], ascending=[True, True, True])
+        
+        # Save as CSV
         os.makedirs(os.path.dirname(args.out), exist_ok=True)
         df.to_csv(args.out, index=False)
         print(f"\n[parse_enhanced] Saved {len(df)} rows to {args.out}")
+        print(f"  Sorted by: track → race → box")
         
-        # Save as JSON (preserves race history as list)
+        # Save as JSON (preserves race history as list, also sorted)
         os.makedirs(os.path.dirname(args.json), exist_ok=True)
+        # Convert sorted DataFrame back to list of dicts for JSON
+        sorted_rows = df.to_dict('records')
         with open(args.json, 'w') as f:
-            json.dump(all_rows, f, indent=2)
+            json.dump(sorted_rows, f, indent=2)
         print(f"[parse_enhanced] Saved detailed data to {args.json}")
         
         # Print summary
