@@ -10,9 +10,11 @@ from typing import List, Dict, Optional
 import math
 
 
-def calculate_speed_kmh(dog_data: Dict[str, any]) -> Optional[float]:
+def compute_speed_metrics(dog_data: Dict[str, any]) -> Optional[float]:
     """
-    Calculate Speed_kmh from Section 2 data (S2_AllSpeeds).
+    Compute Speed_kmh from Section 2 data (S2_AllSpeeds).
+    
+    Speed_kmh = max(S2_AllSpeeds) if list exists else NaN
     
     Uses the maximum speed from all parsed Section 2 runs.
     Does NOT fall back to RaceTime or CurrentDistance.
@@ -21,7 +23,7 @@ def calculate_speed_kmh(dog_data: Dict[str, any]) -> Optional[float]:
         dog_data: Dict containing parsed form data with S2_AllSpeeds
         
     Returns:
-        Max speed in km/h, or None if no valid Section 2 data
+        Max speed in km/h, or float('nan') if no valid Section 2 data
     """
     s2_speeds = dog_data.get('S2_AllSpeeds', [])
     
@@ -31,8 +33,22 @@ def calculate_speed_kmh(dog_data: Dict[str, any]) -> Optional[float]:
         if valid_speeds:
             return max(valid_speeds)
     
-    # No fallback - return None if Section 2 data unavailable
-    return None
+    # Return NaN if Section 2 data unavailable (no fallback to RaceTime or CurrentDistance)
+    return float('nan')
+
+
+def calculate_speed_kmh(dog_data: Dict[str, any]) -> Optional[float]:
+    """
+    Legacy wrapper for compute_speed_metrics.
+    
+    Args:
+        dog_data: Dict containing parsed form data with S2_AllSpeeds
+        
+    Returns:
+        Max speed in km/h, or None if no valid Section 2 data
+    """
+    result = compute_speed_metrics(dog_data)
+    return None if math.isnan(result) else result
 
 
 def build_advanced_features(dog_data: Dict[str, any]) -> Dict[str, any]:
@@ -47,8 +63,8 @@ def build_advanced_features(dog_data: Dict[str, any]) -> Dict[str, any]:
     """
     result = dict(dog_data)
     
-    # Calculate Speed_kmh from Section 2
-    result['Speed_kmh'] = calculate_speed_kmh(dog_data)
+    # Calculate Speed_kmh from Section 2 using compute_speed_metrics
+    result['Speed_kmh'] = compute_speed_metrics(dog_data)
     
     # Additional advanced features can be added here
     # For now, focus on Speed_kmh as per requirements
