@@ -47,6 +47,16 @@ if errorlevel 1 (
 python --version
 python --version >> %LOG_FILE% 2>&1
 
+REM Check Python version (basic check)
+echo [INFO] Verifying Python version is suitable...
+python -c "import sys; exit(0 if sys.version_info >= (3, 8) else 1)" 2>nul
+if errorlevel 1 (
+    echo [WARNING] Python version may be too old. Python 3.8+ is recommended.
+    echo [WARNING] Current version:
+    python --version
+    echo.
+)
+
 REM Check if virtual environment exists, create if not
 if not exist "venv" (
     echo [INFO] Creating Python virtual environment...
@@ -81,15 +91,38 @@ python -m pip install --upgrade pip >> %LOG_FILE% 2>&1
 
 REM Install dependencies
 echo [INFO] Installing required dependencies...
+echo [INFO] This may take a few minutes on first run...
 echo [%DATE% %TIME%] Installing dependencies from requirements.txt >> %LOG_FILE%
+
+REM Try to install with verbose output to catch errors
 pip install -r requirements.txt >> %LOG_FILE% 2>&1
-if errorlevel 1 (
-    echo [ERROR] Failed to install dependencies!
-    echo [ERROR] Check %LOG_FILE% for details.
-    pause
-    exit /b 1
+set INSTALL_EXIT_CODE=%errorlevel%
+
+if %INSTALL_EXIT_CODE% neq 0 (
+    echo.
+    echo [WARNING] Standard installation encountered issues.
+    echo [INFO] Attempting installation with individual packages...
+    echo [%DATE% %TIME%] Retrying individual package installation >> %LOG_FILE%
+    
+    REM Try installing packages one by one for better diagnostics
+    pip install requests==2.32.3 >> %LOG_FILE% 2>&1
+    pip install beautifulsoup4==4.12.3 >> %LOG_FILE% 2>&1
+    pip install lxml==5.2.2 >> %LOG_FILE% 2>&1
+    pip install pandas==2.2.2 >> %LOG_FILE% 2>&1
+    pip install python-dateutil==2.9.0.post0 >> %LOG_FILE% 2>&1
+    pip install pytz==2024.1 >> %LOG_FILE% 2>&1
+    pip install tenacity==8.5.0 >> %LOG_FILE% 2>&1
+    pip install openpyxl==3.1.5 >> %LOG_FILE% 2>&1
+    
+    echo.
+    echo [INFO] Individual package installation attempted.
+    echo [INFO] Some packages may have warnings but could still work.
+    echo.
+    echo Press any key to continue with pipeline execution...
+    pause >nul
+) else (
+    echo [SUCCESS] Dependencies installed.
 )
-echo [SUCCESS] Dependencies installed.
 
 echo.
 echo ====================================================================
@@ -158,5 +191,36 @@ echo ====================================================================
 echo   Execution Complete - Check %LOG_FILE% for Full Details
 echo ====================================================================
 echo.
+
+REM Display troubleshooting tips if there were errors
+if %INSTALL_EXIT_CODE% neq 0 (
+    echo.
+    echo ====================================================================
+    echo   TROUBLESHOOTING TIPS - Dependency Installation Issues
+    echo ====================================================================
+    echo.
+    echo Common solutions:
+    echo   1. Check your internet connection
+    echo   2. Try running as Administrator (right-click, Run as administrator^)
+    echo   3. Manually install problematic packages:
+    echo      - Open Command Prompt
+    echo      - Navigate to this folder
+    echo      - Run: venv\Scripts\activate
+    echo      - Run: pip install --upgrade pip
+    echo      - Run: pip install -r requirements.txt -v
+    echo.
+    echo   4. Check if antivirus is blocking pip
+    echo   5. Try using a different network or VPN
+    echo   6. Review %LOG_FILE% for specific error messages
+    echo.
+    echo For Python 3.14 compatibility issues:
+    echo   - Some packages may not have wheels for Python 3.14 yet
+    echo   - Consider using Python 3.11 or 3.12 instead
+    echo   - Download from: https://www.python.org/downloads/
+    echo.
+    echo ====================================================================
+    echo.
+)
+
 echo Press any key to exit...
 pause >nul

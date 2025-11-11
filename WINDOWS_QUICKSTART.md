@@ -7,9 +7,12 @@ This repository includes `run_greyhound_local.bat` for easy Windows execution.
 ### Prerequisites
 
 - **Windows OS** (Windows 7 or later)
-- **Python 3.8+** installed and added to PATH
+- **Python 3.8 - 3.12** installed and added to PATH
+  - **Recommended:** Python 3.11 or 3.12 for best compatibility
   - Download from: https://www.python.org/downloads/
   - **Important:** Check "Add Python to PATH" during installation
+  - **Note:** Python 3.14+ may have compatibility issues with some packages (pandas, lxml)
+  - If you have Python 3.14, consider installing Python 3.12 alongside it
 
 ### Usage
 
@@ -64,10 +67,29 @@ After execution, check these folders:
 - Delete the `venv` folder if it exists
 - Run the batch script again
 
-**"Failed to install dependencies"**
-- Check `run_log.txt` for specific errors
-- Ensure you have internet connection
-- Try running: `python -m pip install --upgrade pip` manually
+**"Failed to install dependencies"** or **Dependency installation issues**
+- **Check internet connection** - pip needs to download packages
+- **Try running as Administrator** - Right-click `run_greyhound_local.bat` → Run as administrator
+- **Python 3.14 compatibility** - Some packages may not have wheels for Python 3.14 yet
+  - **Recommended:** Use Python 3.11 or 3.12 for best compatibility
+  - Download from: https://www.python.org/downloads/
+  - Python 3.8, 3.9, 3.10, 3.11, or 3.12 are all supported
+- **Check antivirus** - Some antivirus software blocks pip installations
+- **Network issues** - Try a different network or disable VPN temporarily
+- **Manual installation:**
+  ```cmd
+  cd path\to\Greyhound
+  venv\Scripts\activate
+  pip install --upgrade pip
+  pip install -r requirements.txt -v
+  ```
+- Check `run_log.txt` for specific error messages
+
+**Package-specific issues:**
+- **lxml** - May require Microsoft C++ Build Tools on some systems
+  - Download: https://visualstudio.microsoft.com/visual-cpp-build-tools/
+- **pandas** - Usually installs fine, but needs numpy which may have compatibility issues with Python 3.14
+  - Solution: Use Python 3.11 or 3.12
 
 **Script runs but no outputs**
 - Check `run_log.txt` for error messages
