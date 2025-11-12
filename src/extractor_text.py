@@ -6,11 +6,14 @@ Extract Group A and Group B data (Dog Summary) from greyhound race PDFs.
 
 Uses pypdf to extract text and regex patterns to capture all dog summary
 variables including race info, performance metrics, and breeding data.
+
+Includes OCR fallback for scanned/image-based PDFs using Tesseract.
 """
 
 from __future__ import annotations
 import re
 import logging
+import platform
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -20,6 +23,55 @@ from pypdf import PdfReader
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def extract_text_ocr(pdf_path: str | Path) -> str:
+    """
+    Extract text from PDF using OCR (Tesseract) for scanned/image-based PDFs.
+    
+    This function converts each PDF page to an image and uses pytesseract to
+    extract text via OCR.
+    
+    Args:
+        pdf_path: Path to the PDF file
+    
+    Returns:
+        Combined text from all pages
+    """
+    try:
+        from pdf2image import convert_from_path
+        import pytesseract
+        
+        # Set Tesseract binary path based on OS
+        if platform.system() == 'Windows':
+            pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+        # On Linux/Mac, tesseract should be in PATH
+        
+        logger.info(f"Using OCR fallback for {Path(pdf_path).name}")
+        
+        # Convert PDF to images
+        images = convert_from_path(str(pdf_path))
+        
+        # Extract text from each image
+        all_text = []
+        for i, image in enumerate(images, 1):
+            page_text = pytesseract.image_to_string(image)
+            all_text.append(page_text)
+            logger.debug(f"OCR extracted {len(page_text)} characters from page {i}")
+        
+        combined_text = '\n\n'.join(all_text)
+        logger.info(f"OCR extraction complete: {len(combined_text)} total characters")
+        
+        return combined_text
+        
+    except ImportError as e:
+        logger.error(f"OCR dependencies not available: {e}")
+        logger.error("Install with: pip install pytesseract pdf2image")
+        logger.error("Also requires: tesseract-ocr and poppler-utils system packages")
+        return ""
+    except Exception as e:
+        logger.error(f"OCR extraction failed: {e}")
+        return ""
 
 
 # Regex patterns for extracting various fields
@@ -215,6 +267,9 @@ def extract_summary_data(pdf_path: str | Path) -> pd.DataFrame:
     """
     Extract all Group A and Group B data from a PDF.
     
+    Uses pypdf for text extraction with automatic OCR fallback for
+    scanned or image-based PDFs.
+    
     Args:
         pdf_path: Path to the PDF file
     
@@ -227,30 +282,61 @@ def extract_summary_data(pdf_path: str | Path) -> pd.DataFrame:
     try:
         reader = PdfReader(str(pdf_path))
         all_dogs = []
+        use_ocr = False
         
         for page_num, page in enumerate(reader.pages, 1):
+            # Try pypdf text extraction first
             text = page.extract_text()
             
-            # Find race number on this page
-            race_match = RACE_NO_PATTERN.search(text)
-            race_no = int(race_match.group(1)) if race_match else page_num
+            # Check if text extraction failed or returned minimal text
+            if len(text.strip()) < 10:
+                logger.warning(f"Page {page_num}: Minimal text detected ({len(text)} chars), triggering OCR fallback")
+                use_ocr = True
+                break
+        
+        # If OCR is needed, extract text using Tesseract
+        if use_ocr:
+            text = extract_text_ocr(pdf_path)
+            if not text:
+                logger.error(f"OCR fallback failed for {pdf_path.name}")
+                # Return empty DataFrame
+                return pd.DataFrame(columns=_get_summary_columns())
             
-            # Extract dogs from this page
-            dogs = extract_dog_summary_from_text(text, race_no)
-            all_dogs.extend(dogs)
-            
-            logger.debug(f"Page {page_num}: Extracted {len(dogs)} dogs for Race {race_no}")
+            # Process the OCR text as a single document
+            # Find all race numbers
+            race_matches = list(RACE_NO_PATTERN.finditer(text))
+            if not race_matches:
+                # Extract with default race number
+                dogs = extract_dog_summary_from_text(text, race_no=1)
+                all_dogs.extend(dogs)
+            else:
+                # Process each race section
+                for i, race_match in enumerate(race_matches):
+                    race_no = int(race_match.group(1))
+                    # Get text from this race to next race (or end)
+                    start_pos = race_match.start()
+                    end_pos = race_matches[i + 1].start() if i + 1 < len(race_matches) else len(text)
+                    race_text = text[start_pos:end_pos]
+                    
+                    dogs = extract_dog_summary_from_text(race_text, race_no)
+                    all_dogs.extend(dogs)
+        else:
+            # Normal pypdf extraction
+            for page_num, page in enumerate(reader.pages, 1):
+                text = page.extract_text()
+                
+                # Find race number on this page
+                race_match = RACE_NO_PATTERN.search(text)
+                race_no = int(race_match.group(1)) if race_match else page_num
+                
+                # Extract dogs from this page
+                dogs = extract_dog_summary_from_text(text, race_no)
+                all_dogs.extend(dogs)
+                
+                logger.debug(f"Page {page_num}: Extracted {len(dogs)} dogs for Race {race_no}")
         
         # Create DataFrame with proper column order
-        columns = [
-            'Race_No', 'Career_W-P-S', 'Avg_Speed_km/h', 'Dog_Name', 'Prize_Money', 'Min_Speed_km/h',
-            'Tab_No', 'RTC', 'Max_Speed_km/h', 'FF_Form', 'DLR', 'BP', 'DLW', 'A/S', 'Car_PM/s (G1)',
-            'WT (kg)', '12m_PM/s (G2)', 'Trainer', 'API (G3)', 'Sire', 'RTC/km', 'Dam', 'Trainer_Win_%',
-            'Owner', 'Trainer_Place_%', 'Raced_Dist_W-P-S', 'Crs_W-P-S', 'Dist_W-P-S', 'FU_W-P-S',
-            '2U_W-P-S', 'DOD'
-        ]
-        
-        df = pd.DataFrame(all_dogs, columns=columns)
+        df = pd.DataFrame(all_dogs, columns=_get_summary_columns())
         logger.info(f"Extracted {len(df)} dogs from {pdf_path.name}")
         
         return df
@@ -258,14 +344,18 @@ def extract_summary_data(pdf_path: str | Path) -> pd.DataFrame:
     except Exception as e:
         logger.error(f"Error extracting from {pdf_path}: {e}")
         # Return empty DataFrame with correct columns
-        columns = [
-            'Race_No', 'Career_W-P-S', 'Avg_Speed_km/h', 'Dog_Name', 'Prize_Money', 'Min_Speed_km/h',
-            'Tab_No', 'RTC', 'Max_Speed_km/h', 'FF_Form', 'DLR', 'BP', 'DLW', 'A/S', 'Car_PM/s (G1)',
-            'WT (kg)', '12m_PM/s (G2)', 'Trainer', 'API (G3)', 'Sire', 'RTC/km', 'Dam', 'Trainer_Win_%',
-            'Owner', 'Trainer_Place_%', 'Raced_Dist_W-P-S', 'Crs_W-P-S', 'Dist_W-P-S', 'FU_W-P-S',
-            '2U_W-P-S', 'DOD'
-        ]
-        return pd.DataFrame(columns=columns)
+        return pd.DataFrame(columns=_get_summary_columns())
+
+
+def _get_summary_columns() -> List[str]:
+    """Return the standard column list for Dog Summary DataFrame."""
+    return [
+        'Race_No', 'Career_W-P-S', 'Avg_Speed_km/h', 'Dog_Name', 'Prize_Money', 'Min_Speed_km/h',
+        'Tab_No', 'RTC', 'Max_Speed_km/h', 'FF_Form', 'DLR', 'BP', 'DLW', 'A/S', 'Car_PM/s (G1)',
+        'WT (kg)', '12m_PM/s (G2)', 'Trainer', 'API (G3)', 'Sire', 'RTC/km', 'Dam', 'Trainer_Win_%',
+        'Owner', 'Trainer_Place_%', 'Raced_Dist_W-P-S', 'Crs_W-P-S', 'Dist_W-P-S', 'FU_W-P-S',
+        '2U_W-P-S', 'DOD'
+    ]
 
 
 if __name__ == "__main__":

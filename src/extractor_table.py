@@ -6,11 +6,14 @@ Extract Group C data (Race History Detail) from greyhound race PDFs.
 
 Extracts historical race performance data from text-based table sections
 in the PDF, including race results, timing, odds, and track information.
+
+Includes OCR fallback for scanned/image-based PDFs using Tesseract.
 """
 
 from __future__ import annotations
 import re
 import logging
+import platform
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
@@ -21,6 +24,55 @@ from pypdf import PdfReader
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def extract_text_ocr(pdf_path: str | Path) -> str:
+    """
+    Extract text from PDF using OCR (Tesseract) for scanned/image-based PDFs.
+    
+    This function converts each PDF page to an image and uses pytesseract to
+    extract text via OCR.
+    
+    Args:
+        pdf_path: Path to the PDF file
+    
+    Returns:
+        Combined text from all pages
+    """
+    try:
+        from pdf2image import convert_from_path
+        import pytesseract
+        
+        # Set Tesseract binary path based on OS
+        if platform.system() == 'Windows':
+            pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+        # On Linux/Mac, tesseract should be in PATH
+        
+        logger.info(f"Using OCR fallback for {Path(pdf_path).name}")
+        
+        # Convert PDF to images
+        images = convert_from_path(str(pdf_path))
+        
+        # Extract text from each image
+        all_text = []
+        for i, image in enumerate(images, 1):
+            page_text = pytesseract.image_to_string(image)
+            all_text.append(page_text)
+            logger.debug(f"OCR extracted {len(page_text)} characters from page {i}")
+        
+        combined_text = '\n\n'.join(all_text)
+        logger.info(f"OCR extraction complete: {len(combined_text)} total characters")
+        
+        return combined_text
+        
+    except ImportError as e:
+        logger.error(f"OCR dependencies not available: {e}")
+        logger.error("Install with: pip install pytesseract pdf2image")
+        logger.error("Also requires: tesseract-ocr and poppler-utils system packages")
+        return ""
+    except Exception as e:
+        logger.error(f"OCR extraction failed: {e}")
+        return ""
 
 
 # Pattern for race history lines
@@ -164,6 +216,9 @@ def extract_history_data(pdf_path: str | Path) -> pd.DataFrame:
     """
     Extract all Group C (Race History Detail) data from a PDF.
     
+    Uses pypdf for text extraction with automatic OCR fallback for
+    scanned or image-based PDFs.
+    
     Args:
         pdf_path: Path to the PDF file
     
@@ -176,11 +231,28 @@ def extract_history_data(pdf_path: str | Path) -> pd.DataFrame:
     try:
         reader = PdfReader(str(pdf_path))
         all_history = []
+        use_ocr = False
         
+        # First, check if we need OCR
         for page_num, page in enumerate(reader.pages, 1):
             text = page.extract_text()
             
-            # Find dog names on this page
+            # Check if text extraction failed or returned minimal text
+            if len(text.strip()) < 10:
+                logger.warning(f"Page {page_num}: Minimal text detected ({len(text)} chars), triggering OCR fallback")
+                use_ocr = True
+                break
+        
+        # If OCR is needed, extract text using Tesseract
+        if use_ocr:
+            text = extract_text_ocr(pdf_path)
+            if not text:
+                logger.error(f"OCR fallback failed for {pdf_path.name}")
+                # Return empty DataFrame
+                return pd.DataFrame(columns=_get_history_columns())
+            
+            # Process the OCR text as a single document
+            # Find dog names
             dog_names = re.findall(r'^\d+\.\s*\n([A-Z][A-Z\s]+)\s*\n', text, re.MULTILINE)
             
             # For each dog, extract their race history
@@ -195,18 +267,31 @@ def extract_history_data(pdf_path: str | Path) -> pd.DataFrame:
                 records = extract_race_history_from_text(text, dog_name, tab_no)
                 all_history.extend(records)
                 
-                logger.debug(f"Page {page_num}: Extracted {len(records)} history records for {dog_name}")
+                logger.debug(f"Extracted {len(records)} history records for {dog_name} (OCR)")
+        else:
+            # Normal pypdf extraction
+            for page_num, page in enumerate(reader.pages, 1):
+                text = page.extract_text()
+                
+                # Find dog names on this page
+                dog_names = re.findall(r'^\d+\.\s*\n([A-Z][A-Z\s]+)\s*\n', text, re.MULTILINE)
+                
+                # For each dog, extract their race history
+                for dog_name in dog_names:
+                    dog_name = dog_name.strip()
+                    
+                    # Find tab number for this dog
+                    tab_match = re.search(rf'{re.escape(dog_name)}.*?\((\d+)\)', text, re.DOTALL)
+                    tab_no = tab_match.group(1) if tab_match else 'N/A'
+                    
+                    # Extract history records
+                    records = extract_race_history_from_text(text, dog_name, tab_no)
+                    all_history.extend(records)
+                    
+                    logger.debug(f"Page {page_num}: Extracted {len(records)} history records for {dog_name}")
         
         # Create DataFrame with proper column order
-        columns = [
-            'Dog_Name', 'Tab_No', 'Hist_Date', 'Hist_Track', 'Hist_Distance', 'Hist_Finish_Pos',
-            'Hist_Margin_L', 'Hist_Race_Time', 'Hist_Sec_Time', 'Hist_Sec_Time_Adj',
-            'Hist_Speed_km/h', 'Hist_SOT', 'Hist_RST', 'Hist_BP', 'Hist_Odds', 'Hist_API',
-            'Hist_Prize_Won', 'Hist_Winner', 'Hist_2nd_Place', 'Hist_3rd_Place',
-            'Hist_Settled_Turn', 'Hist_Ongoing_Winners', 'Hist_Track_Direction'
-        ]
-        
-        df = pd.DataFrame(all_history, columns=columns)
+        df = pd.DataFrame(all_history, columns=_get_history_columns())
         logger.info(f"Extracted {len(df)} race history records from {pdf_path.name}")
         
         return df
@@ -214,14 +299,18 @@ def extract_history_data(pdf_path: str | Path) -> pd.DataFrame:
     except Exception as e:
         logger.error(f"Error extracting race history from {pdf_path}: {e}")
         # Return empty DataFrame with correct columns
-        columns = [
-            'Dog_Name', 'Tab_No', 'Hist_Date', 'Hist_Track', 'Hist_Distance', 'Hist_Finish_Pos',
-            'Hist_Margin_L', 'Hist_Race_Time', 'Hist_Sec_Time', 'Hist_Sec_Time_Adj',
-            'Hist_Speed_km/h', 'Hist_SOT', 'Hist_RST', 'Hist_BP', 'Hist_Odds', 'Hist_API',
-            'Hist_Prize_Won', 'Hist_Winner', 'Hist_2nd_Place', 'Hist_3rd_Place',
-            'Hist_Settled_Turn', 'Hist_Ongoing_Winners', 'Hist_Track_Direction'
-        ]
-        return pd.DataFrame(columns=columns)
+        return pd.DataFrame(columns=_get_history_columns())
+
+
+def _get_history_columns() -> List[str]:
+    """Return the standard column list for Race History DataFrame."""
+    return [
+        'Dog_Name', 'Tab_No', 'Hist_Date', 'Hist_Track', 'Hist_Distance', 'Hist_Finish_Pos',
+        'Hist_Margin_L', 'Hist_Race_Time', 'Hist_Sec_Time', 'Hist_Sec_Time_Adj',
+        'Hist_Speed_km/h', 'Hist_SOT', 'Hist_RST', 'Hist_BP', 'Hist_Odds', 'Hist_API',
+        'Hist_Prize_Won', 'Hist_Winner', 'Hist_2nd_Place', 'Hist_3rd_Place',
+        'Hist_Settled_Turn', 'Hist_Ongoing_Winners', 'Hist_Track_Direction'
+    ]
 
 
 if __name__ == "__main__":
