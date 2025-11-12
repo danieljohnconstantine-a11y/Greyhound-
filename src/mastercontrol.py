@@ -29,13 +29,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     from fetch_forms import fetch_all
     from parse_pdf import parse_folder
-    from export_to_excel import export_to_excel, create_dog_summary_df, create_race_history_df
-except ImportError:
-    print("Error: Could not import required modules.")
+    from export_to_excel import export_to_excel
+    from extractor_text import extract_summary_data
+    from extractor_table import extract_history_data
+except ImportError as e:
+    print(f"Error: Could not import required modules: {e}")
     print("Make sure you are running from the repository root.")
     sys.exit(1)
 
 import pandas as pd
+import logging
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 def setup_directories() -> tuple[Path, Path, Path]:
@@ -243,22 +253,84 @@ Examples:
             traceback.print_exc()
         return 1
     
-    # Step 4: Export to Excel
-    print("\n[4/4] Exporting to Excel...")
+    # Step 4: Enhanced PDF Extraction and Excel Export
+    print("\n[4/4] Enhanced extraction and Excel export...")
     try:
-        # Create Dog Summary and Race History DataFrames
-        summary_df = create_dog_summary_df(parsed_df)
-        history_df = create_race_history_df(parsed_df)
-        
-        # Generate Excel filename with timestamp
-        excel_path = output_dir / f"greyhound_results_{timestamp}.xlsx"
-        
-        # Export to Excel
-        export_to_excel(summary_df, history_df, excel_path)
-        print(f"      ✓ Excel export completed")
+        # Get list of PDF files
+        pdf_files = list(forms_dir.glob("*.pdf"))
+        if not pdf_files:
+            print("      ⚠ No PDF files found in forms directory")
+            logger.warning("No PDFs to process")
+        else:
+            logger.info(f"Found {len(pdf_files)} PDF files to process")
+            print(f"      Processing {len(pdf_files)} PDF file(s)...")
+            
+            all_summary_dfs = []
+            all_history_dfs = []
+            
+            # Process each PDF with enhanced extractors
+            for pdf_file in pdf_files:
+                logger.info(f"Processing {pdf_file.name}")
+                print(f"      - {pdf_file.name}")
+                
+                try:
+                    # Extract summary data (Groups A & B)
+                    summary_df = extract_summary_data(pdf_file)
+                    all_summary_dfs.append(summary_df)
+                    logger.info(f"  Extracted {len(summary_df)} dogs from {pdf_file.name}")
+                    
+                    # Extract history data (Group C)
+                    history_df = extract_history_data(pdf_file)
+                    all_history_dfs.append(history_df)
+                    logger.info(f"  Extracted {len(history_df)} history records from {pdf_file.name}")
+                    
+                except Exception as e:
+                    logger.error(f"  Error processing {pdf_file.name}: {e}")
+                    if args.verbose:
+                        import traceback
+                        traceback.print_exc()
+            
+            # Combine all DataFrames
+            if all_summary_dfs:
+                combined_summary = pd.concat(all_summary_dfs, ignore_index=True)
+                logger.info(f"Total dogs extracted: {len(combined_summary)}")
+                print(f"      ✓ Extracted {len(combined_summary)} total dogs")
+            else:
+                combined_summary = pd.DataFrame()
+                logger.warning("No summary data extracted")
+            
+            if all_history_dfs:
+                combined_history = pd.concat(all_history_dfs, ignore_index=True)
+                logger.info(f"Total history records: {len(combined_history)}")
+                print(f"      ✓ Extracted {len(combined_history)} total history records")
+            else:
+                combined_history = pd.DataFrame()
+                logger.warning("No history data extracted")
+            
+            # Generate Excel filename with timestamp
+            excel_path = output_dir / f"greyhound_results_{timestamp}.xlsx"
+            
+            # Export to Excel
+            if not combined_summary.empty or not combined_history.empty:
+                export_to_excel(combined_summary, combined_history, excel_path)
+                print(f"      ✓ Excel export completed")
+                logger.info(f"Excel file created: {excel_path}")
+                
+                # Log statistics
+                print("\n      Excel Statistics:")
+                print(f"        - Dog Summary rows: {len(combined_summary)}")
+                print(f"        - Race History rows: {len(combined_history)}")
+                if not combined_summary.empty:
+                    print(f"        - Unique dogs: {combined_summary['Dog_Name'].nunique()}")
+                if not combined_history.empty:
+                    print(f"        - Dogs with history: {combined_history['Dog_Name'].nunique()}")
+            else:
+                logger.warning("No data to export to Excel")
+                print("      ⚠ No data available for Excel export")
         
     except Exception as e:
-        print(f"      ✗ Error exporting to Excel: {e}")
+        print(f"      ✗ Error in enhanced extraction: {e}")
+        logger.error(f"Enhanced extraction error: {e}")
         if args.verbose:
             import traceback
             traceback.print_exc()
