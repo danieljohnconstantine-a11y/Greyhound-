@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     from fetch_forms import fetch_all
     from parse_pdf import parse_folder
+    from export_to_excel import export_to_excel, create_dog_summary_df, create_race_history_df
 except ImportError:
     print("Error: Could not import required modules.")
     print("Make sure you are running from the repository root.")
@@ -170,7 +171,7 @@ Examples:
     
     # Step 1: Fetch PDFs (unless skipped)
     if not args.skip_fetch:
-        print("\n[1/3] Fetching race form PDFs...")
+        print("\n[1/4] Fetching race form PDFs...")
         try:
             # Set environment variable if date override provided
             if args.date:
@@ -191,10 +192,10 @@ Examples:
                 traceback.print_exc()
             print("\n  Continuing with existing PDFs...")
     else:
-        print("\n[1/3] Skipping PDF fetch (--skip-fetch enabled)")
+        print("\n[1/4] Skipping PDF fetch (--skip-fetch enabled)")
     
     # Step 2: Parse PDFs
-    print("\n[2/3] Parsing PDFs...")
+    print("\n[2/4] Parsing PDFs...")
     try:
         parsed_df = parse_folder(str(forms_dir))
         print(f"      ✓ Parsed {len(parsed_df)} row(s) from PDFs")
@@ -224,7 +225,7 @@ Examples:
         return 1
     
     # Step 3: Generate reports
-    print("\n[3/3] Generating reports...")
+    print("\n[3/4] Generating reports...")
     try:
         # Calculate probabilities
         prob_df = build_probabilities(parsed_df)
@@ -242,6 +243,28 @@ Examples:
             traceback.print_exc()
         return 1
     
+    # Step 4: Export to Excel
+    print("\n[4/4] Exporting to Excel...")
+    try:
+        # Create Dog Summary and Race History DataFrames
+        summary_df = create_dog_summary_df(parsed_df)
+        history_df = create_race_history_df(parsed_df)
+        
+        # Generate Excel filename with timestamp
+        excel_path = output_dir / f"greyhound_results_{timestamp}.xlsx"
+        
+        # Export to Excel
+        export_to_excel(summary_df, history_df, excel_path)
+        print(f"      ✓ Excel export completed")
+        
+    except Exception as e:
+        print(f"      ✗ Error exporting to Excel: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        # Don't fail the entire pipeline if Excel export fails
+        print("      Continuing despite Excel export error...")
+    
     # Summary
     print("\n" + "=" * 70)
     print("Pipeline completed successfully!")
@@ -250,6 +273,7 @@ Examples:
     print(f"  - Parsed data:     {output_csv}")
     print(f"  - Probabilities:   {prob_csv}")
     print(f"  - Summary report:  {output_dir / 'summary.md'}")
+    print(f"  - Excel export:    {output_dir / f'greyhound_results_{timestamp}.xlsx'}")
     print(f"\nStatistics:")
     print(f"  - Tracks processed: {parsed_df['track'].nunique()}")
     print(f"  - Total races:      {len(parsed_df.groupby(['track', 'race']))}")

@@ -9,6 +9,8 @@ Run with: python -m pytest tests/
 import unittest
 import sys
 from pathlib import Path
+import tempfile
+import os
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -163,6 +165,101 @@ class TestDataIntegrity(unittest.TestCase):
                 file_path.exists(),
                 f"Required file should exist: {file_path}"
             )
+
+
+class TestExcelExport(unittest.TestCase):
+    """Tests for Excel export functionality."""
+    
+    def test_import_export_to_excel(self):
+        """Test that export_to_excel module can be imported."""
+        try:
+            import export_to_excel
+            self.assertIsNotNone(export_to_excel)
+        except ImportError as e:
+            self.fail(f"Failed to import export_to_excel: {e}")
+    
+    def test_create_dog_summary_df(self):
+        """Test Dog Summary DataFrame creation."""
+        import pandas as pd
+        import export_to_excel
+        
+        # Test with sample data
+        sample_data = pd.DataFrame([
+            {"track": "TEST", "date": "2025-01-01", "race": 1, "box": 1, "runner": "DOG A"},
+            {"track": "TEST", "date": "2025-01-01", "race": 1, "box": 2, "runner": "DOG B"},
+        ])
+        
+        result = export_to_excel.create_dog_summary_df(sample_data)
+        
+        self.assertEqual(len(result), 2)
+        self.assertIn("Dog_Name", result.columns)
+        self.assertIn("Race_No", result.columns)
+        self.assertIn("Tab_No", result.columns)
+        # Check for 31 columns as specified
+        self.assertEqual(len(result.columns), 31)
+    
+    def test_create_race_history_df(self):
+        """Test Race History DataFrame creation."""
+        import pandas as pd
+        import export_to_excel
+        
+        # Test with sample data
+        sample_data = pd.DataFrame([
+            {"track": "TEST", "date": "2025-01-01", "race": 1, "box": 1, "runner": "DOG A"},
+        ])
+        
+        result = export_to_excel.create_race_history_df(sample_data)
+        
+        self.assertEqual(len(result), 1)
+        self.assertIn("Dog_Name", result.columns)
+        self.assertIn("Hist_Date", result.columns)
+        self.assertIn("Hist_Track", result.columns)
+        # Check for 23 columns as specified
+        self.assertEqual(len(result.columns), 23)
+    
+    def test_export_to_excel_creates_file(self):
+        """Test that export_to_excel creates a valid Excel file."""
+        import pandas as pd
+        import export_to_excel
+        from openpyxl import load_workbook
+        
+        # Create test data
+        sample_data = pd.DataFrame([
+            {"track": "TEST", "date": "2025-01-01", "race": 1, "box": 1, "runner": "DOG A"},
+        ])
+        
+        summary_df = export_to_excel.create_dog_summary_df(sample_data)
+        history_df = export_to_excel.create_race_history_df(sample_data)
+        
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
+            temp_path = tmp.name
+        
+        try:
+            # Export to Excel
+            export_to_excel.export_to_excel(summary_df, history_df, temp_path)
+            
+            # Verify file was created
+            self.assertTrue(os.path.exists(temp_path))
+            
+            # Verify Excel structure
+            wb = load_workbook(temp_path)
+            self.assertIn("Dog Summary", wb.sheetnames)
+            self.assertIn("Race History Detail", wb.sheetnames)
+            
+            # Verify Dog Summary has correct columns
+            ws_summary = wb["Dog Summary"]
+            self.assertEqual(ws_summary.max_column, 31)
+            
+            # Verify Race History has correct columns
+            ws_history = wb["Race History Detail"]
+            self.assertEqual(ws_history.max_column, 23)
+            
+        finally:
+            # Clean up
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+
 
 
 if __name__ == "__main__":

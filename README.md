@@ -78,6 +78,27 @@ python src/mastercontrol.py --verbose
 - `data/output/parsed_YYYYMMDDTHHMMSSZ.csv` - Timestamped parsed data
 - `data/output/probabilities.csv` - Win probabilities for each runner
 - `data/output/summary.md` - Human-readable race summary
+- `data/output/greyhound_results_YYYYMMDDTHHMMSSZ.xlsx` - **Excel export with comprehensive data**
+
+#### Excel Export Structure
+
+The Excel file contains two sheets with detailed greyhound racing data:
+
+**Sheet 1: Dog Summary (31 columns)**
+- Race identification and dog details
+- Performance metrics (speed, form, statistics)
+- Breeding information (sire, dam)
+- Trainer and owner details
+- Win-place-show statistics by distance/course
+
+**Sheet 2: Race History Detail (23 columns)**
+- Historical race data for each dog
+- Timing and speed information
+- Race results and margins
+- Prize money and odds
+- Track and race conditions
+
+*Note: The current PDF parser extracts basic data (track, date, race, box, runner). Many advanced columns are marked as "N/A" and would require enhanced PDF parsing to populate with actual values.*
 
 ### Manual Execution (Advanced)
 
