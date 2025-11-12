@@ -2,6 +2,20 @@
 
 A fully automated, free, and open-source Python system for ingesting daily Australian greyhound PDF race forms.
 
+## Quick Start
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the full automation pipeline
+python src/mastercontrol.py
+
+# View outputs
+cat data/output/summary.md
+head data/output/probabilities.csv
+```
+
 ## Overview
 
 This system automatically:
@@ -42,7 +56,30 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Manual Execution
+### Recommended: Use Mastercontrol Script
+
+The easiest way to run the complete pipeline:
+
+```bash
+# Run full pipeline for today (fetch + parse + report)
+python src/mastercontrol.py
+
+# Run for a specific date
+python src/mastercontrol.py --date 2025-09-01
+
+# Skip fetching, only parse existing PDFs
+python src/mastercontrol.py --skip-fetch
+
+# Enable verbose output for debugging
+python src/mastercontrol.py --verbose
+```
+
+**Output files:**
+- `data/output/parsed_YYYYMMDDTHHMMSSZ.csv` - Timestamped parsed data
+- `data/output/probabilities.csv` - Win probabilities for each runner
+- `data/output/summary.md` - Human-readable race summary
+
+### Manual Execution (Advanced)
 
 #### Fetch Forms
 Download today's race form PDFs:
