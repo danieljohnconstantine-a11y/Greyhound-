@@ -8,7 +8,8 @@ FNAME_RE = re.compile(r"^([A-Z]{4})_(\d{4}-\d{2}-\d{2})\.pdf$")
 
 # simple patterns for dog lines and race headers
 RACE_HEADER = re.compile(r"\b(Race\s*No\.?\s*|Race\s*)(\d+)\b", re.IGNORECASE)
-DOG_LINE = re.compile(r"^\s*([1-8])\.\s*([A-Z0-9\'\- ]{2,})\s*$")
+# Match lines like "1. 54223 Zombie Boss" or "1. FAST PUP"
+DOG_LINE = re.compile(r"^\s*([1-8])\.\s*(?:\d+\s+)?([A-Za-z0-9\'\- ]{2,})\s*$")
 
 def parse_pdf(path: str) -> list[dict]:
     fn = os.path.basename(path)
@@ -24,13 +25,27 @@ def parse_pdf(path: str) -> list[dict]:
 
     rows: list[dict] = []
     current_race = None
+    lines = text.splitlines()
 
-    for raw in text.splitlines():
+    for i, raw in enumerate(lines):
         line = raw.strip()
         if not line:
             continue
 
-        # race header update
+        # Race header can be "Race No" followed by number on next line, or "Race 1" style
+        if line.lower() == "race no" and i + 1 < len(lines):
+            # Check next non-empty line for race number
+            for j in range(i + 1, min(i + 4, len(lines))):
+                next_line = lines[j].strip()
+                if next_line and next_line.isdigit():
+                    try:
+                        current_race = int(next_line)
+                    except Exception:
+                        pass
+                    break
+            continue
+        
+        # Also check traditional "Race 1" or "Race No. 1" style
         rh = RACE_HEADER.search(line)
         if rh:
             try:
@@ -39,7 +54,7 @@ def parse_pdf(path: str) -> list[dict]:
                 pass
             continue
 
-        # dog line like "1. FAST PUP"
+        # dog line like "1. 54223 Zombie Boss" or "1. FAST PUP"
         dm = DOG_LINE.match(line)
         if dm and current_race is not None:
             box = int(dm.group(1))
