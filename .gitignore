@@ -18,6 +18,9 @@ env/
 # --- Editors / IDEs ---
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
 
 # --- OS cruft ---
 .DS_Store
@@ -37,6 +40,8 @@ logs/
 *.log
 tmp/
 .cache/
+*.tmp
+*.bak
 
 # --- Project-specific rules ---
 
@@ -49,12 +54,26 @@ data/*
 # (optional) keep a readme or placeholder if you want the folder tracked
 !data/README.md
 !data/.gitkeep
+!data/input/
+!data/input/.gitkeep
+!data/output/
+!data/output/.gitkeep
 
 # Keep all odds dumps ignored (large, noisy)
 data/odds/
 
 # Debug artefacts from parsing
 debug/
+data/html/debug/
+
+# PDFs are large - ignore them
+forms/*.pdf
+data/input/*.pdf
 
 # Allow reports to be committed (probabilities, summaries, bets)
 # (Do NOT ignore reports/; the workflows write reports here)
+
+# Keep directory structure with .gitkeep files
+!tests/.gitkeep
+!forms/.gitkeep
+
