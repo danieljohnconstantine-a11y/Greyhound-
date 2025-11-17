@@ -21,4 +21,4 @@ for url in URLS:
             f.write(r.content)
         print(f"Saved {filename}")
     else:
-        print(f"Failed to fetch {url}"
+        print(f"Failed to fetch {url}")
