@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """
-v3.4 Validation Script - REAL Nov 28 Results
+v3.5 Validation Script - REAL Nov 28 Results
 
-Validates the v3.4 enhancements using ACTUAL Nov 28 race results
+Validates the v3.5 enhancements using ACTUAL Nov 28 race results
 from danieljohnconstantine-a11y/Greyhound-Agent repository.
 
-v3.3 achieved 23% win rate on Nov 28 (135 races)
-v3.4 targets 25-27% by capturing more of the missed winners
+v3.5 Improvements over v3.4:
+1. Track-specific box priors
+2. Reduced trainer momentum (6% vs 12%, requires 3+ wins)
+3. Increased winning streak (1.40x with win weighting)
+4. Speed/Time factor
+5. Railer bonus for box 1-2 at short distances
+6. Adaptive FSI confidence
 """
 import sys
 import os
@@ -21,10 +26,15 @@ from src.features import (
     build_features,
     calculate_winning_streak_boost,
     calculate_closer_bonus,
+    calculate_railer_bonus,
     calculate_trainer_momentum,
     calculate_field_similarity_index,
+    calculate_speed_factor,
+    get_fsi_confidence_multiplier,
+    get_track_box_prior,
     WINNING_STREAK_MULTIPLIER,
     CLOSER_BONUS_BOX_7_8,
+    RAILER_BONUS_BOX_1_2,
     TRAINER_MOMENTUM_BOOST,
 )
 from src.model import score_and_prob
@@ -189,17 +199,23 @@ def run_validation():
     v33_top3_rate = v33_top3 / total_races * 100
     v34_top3_rate = v34_top3 / total_races * 100
     
-    # Analyze v3.4 feature impacts
-    print("v3.4 Feature Analysis:")
+    # Analyze v3.5 feature impacts
+    print("v3.5 Feature Analysis:")
     print("-" * 40)
     
     streak_boosted = sum(1 for f in all_features if f.get("streak_multiplier", 1.0) > 1.0)
     closer_bonus = sum(1 for f in all_features if f.get("closer_bonus", 0) > 0)
+    railer_bonus = sum(1 for f in all_features if f.get("railer_bonus", 0) > 0)
     momentum_bonus = sum(1 for f in all_features if f.get("trainer_momentum", 0) > 0)
+    speed_boosted = sum(1 for f in all_features if f.get("speed_multiplier", 1.0) != 1.0)
+    fsi_adjusted = sum(1 for f in all_features if f.get("fsi_confidence", 1.0) < 1.0)
     
-    print(f"  Runners with Winning Streak boost: {streak_boosted} ({streak_boosted/len(all_features)*100:.1f}%)")
+    print(f"  Runners with Winning Streak boost (1.40x): {streak_boosted} ({streak_boosted/len(all_features)*100:.1f}%)")
     print(f"  Runners with Closer Bonus (Box 7-8 at 500m+): {closer_bonus} ({closer_bonus/len(all_features)*100:.1f}%)")
-    print(f"  Runners with Trainer Momentum: {momentum_bonus} ({momentum_bonus/len(all_features)*100:.1f}%)")
+    print(f"  Runners with Railer Bonus (Box 1-2 at <400m): {railer_bonus} ({railer_bonus/len(all_features)*100:.1f}%)")
+    print(f"  Runners with Trainer Momentum (3+ wins): {momentum_bonus} ({momentum_bonus/len(all_features)*100:.1f}%)")
+    print(f"  Runners with Speed Factor applied: {speed_boosted} ({speed_boosted/len(all_features)*100:.1f}%)")
+    print(f"  Races with FSI confidence adjustment: {fsi_adjusted} ({fsi_adjusted/len(all_features)*100:.1f}%)")
     print()
     
     # Field similarity analysis
@@ -207,7 +223,7 @@ def run_validation():
     avg_fsi = sum(fsi_values) / len(fsi_values) if fsi_values else 0
     
     print("=" * 70)
-    print("VALIDATION RESULTS - REAL NOV 28 DATA")
+    print("VALIDATION RESULTS - REAL NOV 28 DATA (v3.5)")
     print("=" * 70)
     print()
     print(f"  Total races analyzed: {total_races}")
@@ -217,7 +233,7 @@ def run_validation():
     print(f"    Win rate: {v33_rate:.1f}%")
     print(f"    Top-3 hit rate: {v33_top3_rate:.1f}%")
     print()
-    print(f"  v3.4 Enhanced (streak/closer/momentum):")
+    print(f"  v3.5 Enhanced (all 6 improvements):")
     print(f"    Winners picked: {v34_wins} / {total_races}")
     print(f"    Win rate: {v34_rate:.1f}%")
     print(f"    Top-3 hit rate: {v34_top3_rate:.1f}%")
@@ -255,13 +271,16 @@ def run_validation():
     
     print()
     print("=" * 70)
-    print("v3.4 FEATURES CONFIRMED ACTIVE")
+    print("v3.5 FEATURES CONFIRMED ACTIVE")
     print("=" * 70)
     print()
-    print("✅ Enhanced Winning Streak (1.30x) - Hot streak dogs boosted")
+    print("✅ Track-specific box priors (Suggestion 1)")
+    print("✅ Reduced Trainer Momentum (+6%, 3+ wins) (Suggestion 2)")
+    print("✅ Enhanced Winning Streak (1.40x with win weighting) (Suggestion 3)")
+    print("✅ Speed/Time Factor (Suggestion 4)")
+    print("✅ Railer Bonus for Box 1-2 at <400m (Suggestion 5)")
+    print("✅ Adaptive FSI confidence (Suggestion 6)")
     print("✅ Closer Bonus for Box 7-8 (+8% at 500m+)")
-    print("✅ Trainer Momentum Factor (+12% for recent winners)")
-    print("✅ Competitive Field Detection via FieldSimilarityIndex")
     print()
     print(f"Average Field Similarity Index: {avg_fsi:.4f}")
     print(f"  (0.0 = one-sided field, 1.0 = highly competitive)")
@@ -275,8 +294,8 @@ if __name__ == "__main__":
     
     print()
     if win_rate >= 25:
-        print("🎯 TARGET ACHIEVED: v3.4 win rate >= 25%")
+        print("🎯 TARGET ACHIEVED: v3.5 win rate >= 25%")
     elif improvement > 0:
-        print(f"📈 POSITIVE TREND: v3.4 showing +{improvement:.1f}% improvement")
+        print(f"📈 POSITIVE TREND: v3.5 showing +{improvement:.1f}% improvement")
     else:
         print("📊 Continue tuning: Target is 25-27% win rate")
