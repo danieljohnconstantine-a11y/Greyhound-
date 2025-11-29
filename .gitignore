@@ -58,3 +58,4 @@ debug/
 
 # Allow reports to be committed (probabilities, summaries, bets)
 # (Do NOT ignore reports/; the workflows write reports here)
+data/external/
